@@ -1,0 +1,5 @@
+data/auction.db
+data/auction.db-shm
+data/auction.db-wal
+__pycache__/
+tests/__pycache__/

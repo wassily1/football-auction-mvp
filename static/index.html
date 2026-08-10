@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>朋友杯 · 球员竞拍</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <header class="topbar">
+    <a class="brand" href="#market"><span>FC</span><strong>朋友杯</strong><small>AUCTION ROOM</small></a>
+    <nav id="main-nav" hidden>
+      <button data-page="market" class="active">竞价市场</button>
+      <button data-page="players">球员库</button>
+      <button data-page="lineup" class="participant-only">我的阵容</button>
+      <button data-page="admin" class="admin-only">管理台</button>
+    </nav>
+    <div id="user-bar" class="user-bar" hidden></div>
+  </header>
+
+  <main>
+    <section id="auth-page" class="auth-page">
+      <div class="auth-intro">
+        <p class="eyebrow">PRIVATE LEAGUE · LIVE AUCTION</p>
+        <h1>把喜欢的球员，<br><em>带回你的球队。</em></h1>
+        <p>管理员发起竞拍，所有朋友同步看倒计时、报价席和拍卖池。成交后球员自动进入球队阵容。</p>
+        <div class="auth-features"><span>312 名球员</span><span>实时竞价</span><span>阵容球场</span></div>
+      </div>
+      <div class="auth-panel">
+        <div class="auth-tabs"><button data-auth="login" class="active">登录</button><button data-auth="register">创建球队</button></div>
+        <form id="login-form">
+          <label>账号<input name="username" autocomplete="username" required></label>
+          <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+          <button class="primary-button" type="submit">进入竞拍室</button>
+          <p class="auth-hint">初始管理员：<code>admin / admin123</code></p>
+        </form>
+        <form id="register-form" hidden>
+          <label>你的账号<input name="username" required minlength="2"></label>
+          <label>登录密码<input name="password" type="password" required minlength="4"></label>
+          <label>球队名称<input name="team_name" required minlength="2" placeholder="例如：北看台 FC"></label>
+          <button class="primary-button" type="submit">创建并返回登录</button>
+          <p class="auth-hint">新球队初始资金为 0，需要管理员分配。</p>
+        </form>
+      </div>
+    </section>
+
+    <section id="app-shell" hidden>
+      <section id="market-page" class="page active-page">
+        <div class="page-heading"><div><p class="eyebrow">LIVE MARKET</p><h1>竞价市场</h1></div><div id="market-sync" class="sync-pill">同步中</div></div>
+        <div class="auction-workbench">
+          <aside id="auction-player-card" class="auction-player-card empty-player-card"></aside>
+          <div class="auction-live-column">
+            <section id="auction-stage" class="auction-stage empty-stage"></section>
+            <div class="auction-lower-grid">
+              <section class="panel bid-panel"><header><div><p class="eyebrow">BIDDING SEATS</p><h2>竞价席</h2></div><span id="bid-count">0 次报价</span></header><div id="bid-ranking" class="bid-ranking seat-grid"></div></section>
+              <section class="panel history-panel"><header><div><p class="eyebrow">BID HISTORY</p><h2>历史出价</h2></div></header><div id="bid-history" class="bid-history"></div></section>
+            </div>
+          </div>
+          <aside class="panel market-pool-panel"><header><div><p class="eyebrow">AUCTION POOL</p><h2>拍卖池</h2></div><span id="pool-count">0 人</span></header><div class="pool-tabs"><button class="active" data-pool-tab="queued">待拍</button><button data-pool-tab="sold">已拍</button><button data-pool-tab="unsold">流拍</button></div><div id="auction-pool" class="auction-pool"></div></aside>
+        </div>
+      </section>
+
+      <section id="players-page" class="page">
+        <div class="page-heading"><div><p class="eyebrow">PLAYER DATABASE</p><h1>312 人球员库</h1></div></div>
+        <div class="filter-bar"><input id="player-search" placeholder="搜索中文名或英文名"><select id="position-filter"><option value="">全部位置</option><option>GK</option><option>CB</option><option>LB</option><option>RB</option><option>CDM</option><option>CM</option><option>CAM</option><option>LM</option><option>RM</option><option>LW</option><option>RW</option><option>ST</option></select><span id="player-count"></span></div>
+        <div id="player-grid" class="player-grid"></div>
+      </section>
+
+      <section id="lineup-page" class="page">
+        <div class="page-heading"><div><p class="eyebrow">MY SQUAD</p><h1 id="lineup-title">我的阵容</h1></div><div id="lineup-budget" class="budget-card"></div></div>
+        <div class="lineup-layout">
+          <section class="pitch-panel">
+            <div class="pitch"><div class="pitch-line center-line"></div><div class="pitch-circle"></div><div class="penalty top"></div><div class="penalty bottom"></div><div id="starters" class="starters"></div></div>
+          </section>
+          <section class="panel bench-panel"><header><div><p class="eyebrow">SUBSTITUTES</p><h2>替补席</h2></div><span>点击球员切换首发</span></header><div id="bench" class="bench"></div></section>
+        </div>
+      </section>
+
+      <section id="admin-page" class="page admin-only">
+        <div class="page-heading"><div><p class="eyebrow">CONTROL ROOM</p><h1>管理员控制台</h1></div></div>
+        <div class="admin-grid">
+          <section class="panel"><header><div><p class="eyebrow">TEAMS</p><h2>球队资金</h2></div></header><div id="admin-teams"></div></section>
+          <section class="panel auction-launch-panel"><header><div><p class="eyebrow">AUCTION</p><h2>拍品上架</h2></div></header><div class="launch-copy"><strong>从 312 人球员库选择拍品</strong><p>支持搜索指定球员，或按评分、位置和类别随机抽卡。</p><button id="open-queue-dialog" class="primary-button" type="button">＋ 拍品上架</button></div></section>
+          <section class="panel admin-pool"><header><div><p class="eyebrow">QUEUE</p><h2>拍卖池控制</h2></div></header><div id="admin-pool-list"></div></section>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="player-dialog"><button class="dialog-close" aria-label="关闭">×</button><div id="player-detail"></div></dialog>
+  <dialog id="queue-dialog" class="queue-dialog">
+    <button class="dialog-close" aria-label="关闭拍品上架">×</button>
+    <header><p class="eyebrow">AUCTION LOT</p><h2>拍品上架</h2><span>选择指定球员，或按条件随机抽卡</span></header>
+    <div class="queue-tabs"><button class="active" data-queue-tab="search">搜索指定球员</button><button data-queue-tab="random">条件随机抽卡</button></div>
+    <section id="queue-search-panel" class="queue-tab-panel">
+      <div class="queue-search-bar"><input id="queue-search" placeholder="输入球员中文名或英文名"><span id="queue-available-count"></span></div>
+      <div id="queue-player-grid" class="queue-player-grid"></div>
+    </section>
+    <section id="queue-random-panel" class="queue-tab-panel" hidden>
+      <div class="random-filter-grid">
+        <label>最低评分<input id="random-min-rating" type="number" min="1" max="99" value="75"></label>
+        <label>最高评分<input id="random-max-rating" type="number" min="1" max="99" value="95"></label>
+        <label>主位置<select id="random-position"><option value="">全部主位置</option><option>GK</option><option>CB</option><option>LB</option><option>RB</option><option>CDM</option><option>CM</option><option>CAM</option><option>LM</option><option>RM</option><option>LW</option><option>RW</option><option>ST</option></select></label>
+        <label>类别<select id="random-category"><option value="">全部类别</option></select></label>
+      </div>
+      <div class="random-summary"><span>符合条件</span><strong id="random-match-count">0</strong><small>名可上架球员</small></div>
+      <div id="random-preview" class="random-preview"><span>点击下方按钮抽取一名球员</span></div>
+      <button id="draw-player" class="secondary-button" type="button">随机抽取一名</button>
+    </section>
+    <form id="queue-form" class="queue-rules">
+      <input id="queue-player" name="player_id" type="hidden" required>
+      <div class="form-row"><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label>最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="60" required></label></div>
+      <button id="queue-submit" class="primary-button" type="submit" disabled>加入拍卖池</button>
+    </form>
+  </dialog>
+  <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
+  <div id="toast" class="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
