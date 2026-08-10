@@ -1823,7 +1823,7 @@ letter-spacing:-.03em
 }
 .auction-workbench{
 height:calc(100vh - 145px);
-min-height:560px;
+min-height:680px;
 max-height:860px;
 grid-template-columns:minmax(260px,300px) minmax(520px,1fr) minmax(225px,260px);
 align-items:stretch
@@ -1944,7 +1944,7 @@ padding:9px 18px 14px
 .auction-live-column{
 height:100%;
 display:grid;
-grid-template-rows:300px minmax(0,1fr);
+grid-template-rows:380px minmax(250px,1fr);
 gap:10px
 }
 .auction-workbench .auction-stage{
@@ -1953,11 +1953,11 @@ height:100%;
 display:grid;
 grid-template-columns:142px minmax(0,1fr);
 grid-template-areas:"mode mode" "clock price" "bid bid" "guide guide";
-grid-template-rows:auto minmax(112px,1fr) auto auto;
+grid-template-rows:30px 132px 130px 20px;
 align-items:center;
 justify-items:center;
-gap:5px 20px;
-padding:12px 20px 10px;
+gap:8px 20px;
+padding:14px 20px 12px;
 border-radius:8px;
 background:radial-gradient(circle at 38% 45%,rgba(25,76,88,.66),#06141f 66%)
 }
