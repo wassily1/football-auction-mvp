@@ -102,6 +102,7 @@ async function bootstrap() {
 
 function navigate(page) {
   state.page = page;
+  $("#app-shell").dataset.page = page;
   $$(".page").forEach(element => element.classList.remove("active-page"));
   $(`#${page}-page`)?.classList.add("active-page");
   $$("#main-nav button").forEach(button => button.classList.toggle("active", button.dataset.page === page));
@@ -346,7 +347,7 @@ function renderSealedStatus(active, teams) {
 
 function playerShowcaseMarkup(player) {
   return `<div class="showcase-head"><div><strong>${player.overall}</strong><span>${escapeHtml(player.primary_position)}</span></div><em>${escapeHtml(player.category)}</em></div>
-    <div class="showcase-photo">${imageMarkup(player)}</div>
+    <div class="showcase-photo">${imageMarkup(player)}<span class="showcase-role">${escapeHtml((player.roles || []).slice(0, 2).join(" · ") || player.primary_position)}</span><span class="showcase-physical">${player.height_cm || "-"} cm · ${player.weight_kg || "-"} kg</span></div>
     <div class="showcase-name"><small>${escapeHtml(player.name_en)}</small><h2>${escapeHtml(player.name_zh)}</h2><p>${escapeHtml(player.nationality || "-")} · ${escapeHtml(player.club || "-")}</p></div>
     <div class="showcase-data">${radarMarkup(Object.keys(player.stats), Object.values(player.stats))}${statsMarkup(player, "showcase-stats")}</div>
     <div class="showcase-traits"><span>花式 ${player.skill_moves}★</span><span>逆足 ${player.weak_foot}★</span>${player.gold_abilities.slice(0, 2).map(value => `<b>◆ ${escapeHtml(value)}</b>`).join("")}${player.silver_abilities.slice(0, 2).map(value => `<b class="silver">◇ ${escapeHtml(value)}</b>`).join("")}</div>`;
@@ -699,6 +700,7 @@ $("#roster-group").onchange = event => { state.rosterGroup = event.currentTarget
 $("#roster-sort").onchange = event => { state.rosterSort = event.currentTarget.value; renderRoster(); };
 $("#queue-form").onsubmit = queueAuction;
 $("#open-queue-dialog").onclick = openQueueDialog;
+$("#market-queue-shortcut").onclick = openQueueDialog;
 $("#queue-dialog .dialog-close").onclick = () => $("#queue-dialog").close();
 $("#queue-dialog").onclick = event => { if (event.target === $("#queue-dialog")) $("#queue-dialog").close(); };
 $$('[data-queue-tab]').forEach(button => button.onclick = () => switchQueueTab(button.dataset.queueTab));
