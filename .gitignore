@@ -3,3 +3,4 @@ data/auction.db-shm
 data/auction.db-wal
 __pycache__/
 tests/__pycache__/
+.DS_Store

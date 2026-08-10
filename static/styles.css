@@ -854,6 +854,86 @@ background:var(--lime);
 font-weight:900;
 cursor:pointer
 }
+.admin-team-actions{
+display:flex;
+gap:7px
+}
+.admin-team-actions .secondary-action{
+border:1px solid var(--line);
+background:#17313d;
+color:#dbe8e4
+}
+.admin-roster-dialog{
+width:min(1120px,calc(100% - 28px));
+max-width:none;
+padding:0;
+overflow:hidden
+}
+.admin-roster-header{
+display:flex;
+align-items:center;
+justify-content:space-between;
+gap:24px;
+padding:25px 58px 22px 25px;
+border-bottom:1px solid var(--line);
+background:linear-gradient(120deg,rgba(185,243,75,.08),transparent 60%)
+}
+.admin-roster-header h2{
+margin:5px 0;
+font-size:28px
+}
+.admin-roster-header>div>span{
+color:var(--muted);
+font-size:11px
+}
+.admin-roster-summary{
+display:flex;
+gap:8px
+}
+.admin-roster-summary span{
+min-width:92px;
+padding:10px 12px;
+border:1px solid var(--line);
+border-radius:9px;
+background:rgba(0,0,0,.18)
+}
+.admin-roster-summary small,.admin-roster-summary b{
+display:block
+}
+.admin-roster-summary small{
+color:var(--muted);
+font-size:9px
+}
+.admin-roster-summary b{
+margin-top:4px;
+color:var(--lime);
+font-size:16px
+}
+.admin-roster-layout{
+display:grid;
+grid-template-columns:minmax(500px,1.3fr) minmax(280px,.7fr);
+gap:16px;
+padding:16px
+}
+.admin-roster-dialog .pitch{
+min-height:580px
+}
+.admin-roster-bench-panel{
+max-height:610px;
+overflow:auto
+}
+.admin-empty-pitch{
+position:absolute;
+z-index:1;
+left:50%;
+top:50%;
+padding:9px 13px;
+border-radius:8px;
+background:rgba(0,0,0,.48);
+color:#d7e7df;
+font-size:12px;
+transform:translate(-50%,-50%)
+}
 .stack-form{
 padding:20px
 }
@@ -1348,11 +1428,13 @@ box-shadow:0 0 80px rgba(185,243,75,.2)
 .market-pool-panel{grid-column:auto}
 .queue-player-grid{grid-template-columns:repeat(2,1fr)}
 .random-filter-grid{grid-template-columns:repeat(2,1fr)}
+.admin-roster-layout{grid-template-columns:1fr}.admin-roster-dialog .pitch{min-height:540px}.admin-roster-bench-panel{max-height:none}
 }
 @media(max-width:600px){
 .auction-player-card{min-height:570px}.showcase-photo{height:240px}.showcase-photo img{max-height:235px}
 .seat-grid{grid-template-columns:1fr}.market-pool-panel .auction-pool{grid-template-columns:1fr}.queue-player-grid{grid-template-columns:1fr}.random-filter-grid{grid-template-columns:1fr 1fr}
 .queue-dialog{width:calc(100% - 16px)}.queue-tab-panel{padding:10px}.settlement-dialog{padding:35px 18px}.settlement-dialog h2{font-size:58px}
+.admin-roster-header{display:block;padding:22px 48px 18px 18px}.admin-roster-summary{margin-top:14px;display:grid;grid-template-columns:repeat(3,1fr)}.admin-roster-summary span{min-width:0;padding:8px}.admin-roster-layout{padding:8px}.admin-roster-dialog .pitch{min-height:500px}
 }
 @media(max-width:760px){
 .topbar{
@@ -1430,6 +1512,12 @@ margin-top:16px
 }
 .admin-team-row{
 grid-template-columns:1fr 110px auto
+}
+.admin-team-actions{
+grid-column:1/-1
+}
+.admin-team-actions button{
+flex:1
 }
 .form-row{
 grid-template-columns:1fr

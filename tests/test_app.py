@@ -151,6 +151,18 @@ class AuctionFlowTest(unittest.TestCase):
         _, lineup = self.bravo.request("roster")
         self.assertEqual(lineup["roster"][0]["lineup_role"], "starter")
 
+        status, admin_roster = self.admin.request(
+            f"roster?team_id={teams['Bravo FC']['id']}"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(admin_roster["team"]["name"], "Bravo FC")
+        self.assertEqual(admin_roster["team"]["funds"], 750)
+        self.assertEqual(admin_roster["roster"][0]["player"]["id"], player_id)
+        self.assertEqual(admin_roster["roster"][0]["lineup_role"], "starter")
+
+        status, _ = self.alpha.request(f"roster?team_id={teams['Bravo FC']['id']}")
+        self.assertEqual(status, 403)
+
     def test_participant_cannot_use_admin_routes(self) -> None:
         self.alpha.request(
             "register",

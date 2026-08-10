@@ -3,6 +3,7 @@ const state = {
   players: [],
   auction: null,
   roster: null,
+  adminRoster: null,
   page: "market",
   poolTab: "queued",
   queueTab: "search",
@@ -132,7 +133,8 @@ function renderPlayers() {
 function openPlayer(playerId) {
   const player = state.players.find(item => String(item.id) === String(playerId))
     || state.auction?.active?.player
-    || state.roster?.roster.find(item => String(item.player.id) === String(playerId))?.player;
+    || state.roster?.roster.find(item => String(item.player.id) === String(playerId))?.player
+    || state.adminRoster?.roster.find(item => String(item.player.id) === String(playerId))?.player;
   if (!player) return;
   const labels = Object.keys(player.stats);
   const values = Object.values(player.stats);
@@ -416,10 +418,37 @@ async function loadAdmin() {
   if (state.user.role !== "admin") return;
   try {
     const result = await api("admin/teams");
-    $("#admin-teams").innerHTML = result.teams.length ? result.teams.map(team => `<div class="admin-team-row"><div><b>${escapeHtml(team.name)}</b><small>球队 #${team.id}</small></div><input type="number" min="0" value="${team.funds}" data-funds-team="${team.id}"><button data-save-funds="${team.id}">保存</button></div>`).join("") : `<div class="empty-copy">参与者注册后会出现在这里</div>`;
+    $("#admin-teams").innerHTML = result.teams.length ? result.teams.map(team => `<div class="admin-team-row"><div><b>${escapeHtml(team.name)}</b><small>球队 #${team.id}</small></div><input type="number" min="0" value="${team.funds}" data-funds-team="${team.id}"><div class="admin-team-actions"><button data-save-funds="${team.id}">保存</button><button class="secondary-action" data-view-roster="${team.id}">查看阵容</button></div></div>`).join("") : `<div class="empty-copy">参与者注册后会出现在这里</div>`;
     $$('[data-save-funds]').forEach(button => button.onclick = () => saveFunds(button.dataset.saveFunds));
+    $$('[data-view-roster]').forEach(button => button.onclick = () => openAdminRoster(button.dataset.viewRoster));
     renderAdminPool();
   } catch (error) { toast(error.message, "error"); }
+}
+
+async function openAdminRoster(teamId) {
+  try {
+    state.adminRoster = await api(`roster?team_id=${encodeURIComponent(teamId)}`);
+    renderAdminRoster();
+    $("#admin-roster-dialog").showModal();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function renderAdminRoster() {
+  const { team, roster } = state.adminRoster;
+  const starters = roster.filter(item => item.lineup_role === "starter");
+  const bench = roster.filter(item => item.lineup_role === "bench");
+  $("#admin-roster-detail").innerHTML = `
+    <header class="admin-roster-header">
+      <div><p class="eyebrow">TEAM SQUAD · READ ONLY</p><h2>${escapeHtml(team.name)}</h2><span>管理员只读查看，阵容调整仍由参与者完成</span></div>
+      <div class="admin-roster-summary"><span><small>剩余资金</small><b>${money(team.funds)}</b></span><span><small>球员</small><b>${roster.length}</b></span><span><small>首发 / 替补</small><b>${starters.length} / ${bench.length}</b></span></div>
+    </header>
+    <div class="admin-roster-layout">
+      <section class="pitch-panel">
+        <div class="pitch"><div class="pitch-line center-line"></div><div class="pitch-circle"></div><div class="penalty top"></div><div class="penalty bottom"></div>${starters.length ? starters.map((item, index) => fieldPlayer(item, index, starters)).join("") : `<div class="admin-empty-pitch">暂无首发球员</div>`}</div>
+      </section>
+      <section class="panel admin-roster-bench-panel"><header><div><p class="eyebrow">SUBSTITUTES</p><h2>替补席</h2></div><span>点击查看球员详情</span></header><div class="bench">${bench.length ? bench.map(item => `<button class="bench-player" data-player-id="${item.player.id}">${imageMarkup(item.player)}<span><b>${escapeHtml(item.player.name_zh)}</b><small>${item.player.overall} · ${escapeHtml(item.player.primary_position)} · ${money(item.acquired_price)}</small></span><em>查看详情</em></button>`).join("") : `<div class="empty-copy">暂无替补球员</div>`}</div></section>
+    </div>`;
+  $$('[data-player-id]', $("#admin-roster-detail")).forEach(element => element.onclick = () => openPlayer(element.dataset.playerId));
 }
 
 async function saveFunds(teamId) {
@@ -503,5 +532,7 @@ $("#settlement-close").onclick = () => $("#settlement-dialog").close();
 $("#settlement-dialog").onclick = event => { if (event.target === $("#settlement-dialog")) $("#settlement-dialog").close(); };
 $("#player-dialog .dialog-close").onclick = () => $("#player-dialog").close();
 $("#player-dialog").onclick = event => { if (event.target === $("#player-dialog")) $("#player-dialog").close(); };
+$("#admin-roster-dialog .dialog-close").onclick = () => $("#admin-roster-dialog").close();
+$("#admin-roster-dialog").onclick = event => { if (event.target === $("#admin-roster-dialog")) $("#admin-roster-dialog").close(); };
 
 bootstrap().catch(error => toast(error.message, "error"));
