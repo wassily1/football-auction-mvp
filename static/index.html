@@ -63,18 +63,15 @@
 
       <section id="players-page" class="page">
         <div class="page-heading"><div><p class="eyebrow">PLAYER DATABASE</p><h1>312 人球员库</h1></div></div>
-        <div class="filter-bar"><input id="player-search" placeholder="搜索中文名或英文名"><select id="position-filter"><option value="">全部位置</option><option>GK</option><option>CB</option><option>LB</option><option>RB</option><option>CDM</option><option>CM</option><option>CAM</option><option>LM</option><option>RM</option><option>LW</option><option>RW</option><option>ST</option></select><span id="player-count"></span></div>
+        <div class="filter-bar"><input id="player-search" placeholder="搜索球员、国籍或俱乐部"><select id="position-filter"><option value="">全部位置</option><option>GK</option><option>CB</option><option>LB</option><option>RB</option><option>CDM</option><option>CM</option><option>CAM</option><option>LM</option><option>RM</option><option>LW</option><option>RW</option><option>ST</option></select><select id="nationality-filter"><option value="">全部国籍</option></select><select id="club-filter"><option value="">全部俱乐部</option></select><span id="player-count"></span></div>
         <div id="player-grid" class="player-grid"></div>
+        <nav id="player-pagination" class="pagination" aria-label="球员库分页"></nav>
       </section>
 
       <section id="lineup-page" class="page">
         <div class="page-heading"><div><p class="eyebrow">MY SQUAD</p><h1 id="lineup-title">我的阵容</h1></div><div id="lineup-budget" class="budget-card"></div></div>
-        <div class="lineup-layout">
-          <section class="pitch-panel">
-            <div class="pitch"><div class="pitch-line center-line"></div><div class="pitch-circle"></div><div class="penalty top"></div><div class="penalty bottom"></div><div id="starters" class="starters"></div></div>
-          </section>
-          <section class="panel bench-panel"><header><div><p class="eyebrow">SUBSTITUTES</p><h2>替补席</h2></div><span>点击球员切换首发</span></header><div id="bench" class="bench"></div></section>
-        </div>
+        <div class="roster-toolbar"><label>分组方式<select id="roster-group"><option value="position">按位置分组</option><option value="nationality">按国籍分组</option><option value="none">不分组</option></select></label><label>排序方式<select id="roster-sort"><option value="position-price">位置优先、价格降序</option><option value="nationality">国籍、价格降序</option><option value="price-desc">价格从高到低</option><option value="price-asc">价格从低到高</option></select></label></div>
+        <div id="roster-list" class="roster-list"></div>
       </section>
 
       <section id="admin-page" class="page admin-only">
@@ -89,6 +86,7 @@
   </main>
 
   <dialog id="player-dialog"><button class="dialog-close" aria-label="关闭">×</button><div id="player-detail"></div></dialog>
+  <dialog id="team-dialog" class="team-dialog"><button class="dialog-close" aria-label="关闭球队名称编辑">×</button><form id="team-name-form"><p class="eyebrow">TEAM SETTINGS</p><h2>编辑球队名称</h2><label>球队名称<input id="team-name-input" name="name" minlength="2" maxlength="30" required></label><button class="primary-button" type="submit">保存球队名称</button></form></dialog>
   <dialog id="admin-roster-dialog" class="admin-roster-dialog"><button class="dialog-close" aria-label="关闭球队阵容">×</button><div id="admin-roster-detail"></div></dialog>
   <dialog id="queue-dialog" class="queue-dialog">
     <button class="dialog-close" aria-label="关闭拍品上架">×</button>
@@ -111,7 +109,7 @@
     </section>
     <form id="queue-form" class="queue-rules">
       <input id="queue-player" name="player_id" type="hidden" required>
-      <div class="form-row"><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label>最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="60" required></label></div>
+      <div class="form-row auction-rule-grid"><label>竞拍方式<select id="auction-type" name="auction_type"><option value="open">明拍 · 实时公开报价</option><option value="sealed">暗拍 · 每队仅一次报价</option></select></label><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label id="increment-rule">最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>每次倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="60" required></label></div>
       <button id="queue-submit" class="primary-button" type="submit" disabled>加入拍卖池</button>
     </form>
   </dialog>

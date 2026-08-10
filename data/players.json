@@ -7787,7 +7787,7 @@
       "RM"
     ],
     "nationality": "阿尔及利亚",
-    "club": "",
+    "club": "未归属",
     "height_cm": 179,
     "weight_kg": 67,
     "stats": {
@@ -8833,7 +8833,7 @@
     "primary_position": "CB",
     "secondary_positions": [],
     "nationality": "荷兰",
-    "club": "",
+    "club": "未归属",
     "height_cm": 189,
     "weight_kg": 89,
     "stats": {
@@ -11121,7 +11121,7 @@
     "primary_position": "GK",
     "secondary_positions": [],
     "nationality": "丹麦",
-    "club": "",
+    "club": "未归属",
     "height_cm": 189,
     "weight_kg": 84,
     "stats": {
@@ -11235,7 +11235,7 @@
     "primary_position": "CB",
     "secondary_positions": [],
     "nationality": "英格兰",
-    "club": "",
+    "club": "未归属",
     "height_cm": 193,
     "weight_kg": 100,
     "stats": {

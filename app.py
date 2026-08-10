@@ -85,6 +85,7 @@ def init_database() -> None:
             CREATE TABLE IF NOT EXISTS auctions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 player_id TEXT NOT NULL REFERENCES players(id),
+                auction_type TEXT NOT NULL DEFAULT 'open' CHECK (auction_type IN ('open', 'sealed')),
                 status TEXT NOT NULL CHECK (status IN ('queued', 'active', 'sold', 'unsold', 'cancelled')),
                 start_price INTEGER NOT NULL CHECK (start_price >= 0),
                 min_increment INTEGER NOT NULL CHECK (min_increment > 0),
@@ -114,6 +115,11 @@ def init_database() -> None:
             );
             """
         )
+        auction_columns = {row["name"] for row in db.execute("PRAGMA table_info(auctions)")}
+        if "auction_type" not in auction_columns:
+            db.execute(
+                "ALTER TABLE auctions ADD COLUMN auction_type TEXT NOT NULL DEFAULT 'open'"
+            )
         admin = db.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1").fetchone()
         if not admin:
             password = os.environ.get("AUCTION_ADMIN_PASSWORD", "admin123")
@@ -121,13 +127,14 @@ def init_database() -> None:
                 "INSERT INTO users(username, password_hash, role) VALUES (?, ?, 'admin')",
                 ("admin", hash_password(password)),
             )
-        count = db.execute("SELECT COUNT(*) AS count FROM players").fetchone()["count"]
-        if count == 0:
-            players = json.loads(PLAYER_SEED.read_text(encoding="utf-8"))
-            db.executemany(
-                "INSERT INTO players(id, payload) VALUES (?, ?)",
-                [(player["id"], json.dumps(player, ensure_ascii=False)) for player in players],
-            )
+        players = json.loads(PLAYER_SEED.read_text(encoding="utf-8"))
+        db.executemany(
+            """
+            INSERT INTO players(id, payload) VALUES (?, ?)
+            ON CONFLICT(id) DO UPDATE SET payload = excluded.payload
+            """,
+            [(player["id"], json.dumps(player, ensure_ascii=False)) for player in players],
+        )
         db.commit()
     finally:
         db.close()
@@ -365,6 +372,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         self.send_json({"players": players})
 
     def api_get_auction(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_user(user)
         active = db.execute(
             """
             SELECT a.*, p.payload, t.name AS winner_team_name
@@ -380,7 +388,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             active_payload = dict(active)
             active_payload["player"] = player_from_row(active)
             del active_payload["payload"]
-            active_payload["bids"] = [
+            bids = [
                 dict(row)
                 for row in db.execute(
                     """
@@ -395,6 +403,13 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                     (active["id"],),
                 )
             ]
+            active_payload["bid_count"] = len({bid["team_id"] for bid in bids})
+            active_payload["has_bid"] = bool(
+                user
+                and user.get("team_id")
+                and any(bid["team_id"] == user["team_id"] for bid in bids)
+            )
+            active_payload["bids"] = [] if active["auction_type"] == "sealed" else bids
         queued = []
         for row in db.execute(
             """
@@ -444,10 +459,18 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             auction = db.execute("SELECT * FROM auctions WHERE status = 'active' LIMIT 1").fetchone()
             if not auction or auction["ends_at"] <= int(time.time()):
                 raise AppError("当前没有可报价的竞拍")
+            existing = db.execute(
+                "SELECT 1 FROM bids WHERE auction_id = ? AND team_id = ? LIMIT 1",
+                (auction["id"], user["team_id"]),
+            ).fetchone()
+            if auction["auction_type"] == "sealed" and existing:
+                raise AppError("暗拍每支球队只能出价一次")
             top = db.execute(
                 "SELECT MAX(amount) AS amount FROM bids WHERE auction_id = ?", (auction["id"],)
             ).fetchone()["amount"]
-            minimum = auction["start_price"] if top is None else top + auction["min_increment"]
+            minimum = auction["start_price"]
+            if auction["auction_type"] == "open" and top is not None:
+                minimum = top + auction["min_increment"]
             if amount < minimum:
                 raise AppError(f"当前最低有效报价为 {minimum} 万")
             team = db.execute("SELECT funds FROM teams WHERE id = ?", (user["team_id"],)).fetchone()
@@ -457,8 +480,20 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 "INSERT INTO bids(auction_id, team_id, user_id, amount, created_at) VALUES (?, ?, ?, ?, ?)",
                 (auction["id"], user["team_id"], user["id"], amount, int(time.time())),
             )
+            ends_at = int(time.time()) + auction["duration_seconds"]
+            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (ends_at, auction["id"]))
             db.commit()
-        self.send_json({"ok": True, "amount": amount}, HTTPStatus.CREATED)
+        self.send_json({"ok": True, "amount": amount, "ends_at": ends_at}, HTTPStatus.CREATED)
+
+    def api_post_team_name(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] != "participant" or not user.get("team_id"):
+            raise AppError("当前账号没有参与球队", HTTPStatus.FORBIDDEN)
+        name = str(self.read_json().get("name", "")).strip()
+        if len(name) < 2 or len(name) > 30:
+            raise AppError("球队名需要 2–30 个字符")
+        db.execute("UPDATE teams SET name = ? WHERE id = ?", (name, user["team_id"]))
+        self.send_json({"ok": True, "name": name})
 
     def api_get_roster(self, db: sqlite3.Connection, user: dict | None) -> None:
         user = require_user(user)
@@ -510,8 +545,35 @@ class AuctionHandler(SimpleHTTPRequestHandler):
 
     def api_get_admin_teams(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
-        teams = [dict(row) for row in db.execute("SELECT * FROM teams ORDER BY id")]
+        teams = [
+            dict(row)
+            for row in db.execute(
+                """
+                SELECT t.*, u.id AS participant_user_id, u.username
+                FROM teams t
+                LEFT JOIN users u ON u.team_id = t.id AND u.role = 'participant'
+                ORDER BY t.id
+                """
+            )
+        ]
         self.send_json({"teams": teams})
+
+    def api_post_admin_participant_release(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        team_id = int(self.read_json().get("team_id", 0))
+        participant = db.execute(
+            "SELECT id, username FROM users WHERE role = 'participant' AND team_id = ?",
+            (team_id,),
+        ).fetchone()
+        if not participant:
+            raise AppError("该球队没有可释放的参与者账号", HTTPStatus.NOT_FOUND)
+        released_username = f"released-{participant['id']}-{int(time.time())}-{participant['username']}"
+        db.execute("DELETE FROM sessions WHERE user_id = ?", (participant["id"],))
+        db.execute(
+            "UPDATE users SET username = ?, team_id = NULL WHERE id = ?",
+            (released_username, participant["id"]),
+        )
+        self.send_json({"ok": True})
 
     def api_post_admin_funds(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
@@ -552,8 +614,12 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             "SELECT 1 FROM auctions WHERE player_id = ? AND status IN ('queued', 'active')", (player_id,)
         ).fetchone():
             raise AppError("该球员已经在拍卖池中")
+        auction_type = str(data.get("auction_type", "open"))
+        if auction_type not in {"open", "sealed"}:
+            raise AppError("竞拍方式无效")
         values = (
             player_id,
+            auction_type,
             int(data.get("start_price", 0)),
             int(data.get("min_increment", 10)),
             int(data.get("duration_seconds", 60)),
@@ -561,8 +627,8 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         )
         db.execute(
             """
-            INSERT INTO auctions(player_id, status, start_price, min_increment, duration_seconds, created_at)
-            VALUES (?, 'queued', ?, ?, ?, ?)
+            INSERT INTO auctions(player_id, auction_type, status, start_price, min_increment, duration_seconds, created_at)
+            VALUES (?, ?, 'queued', ?, ?, ?, ?)
             """,
             values,
         )

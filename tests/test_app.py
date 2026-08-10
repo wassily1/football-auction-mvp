@@ -108,6 +108,12 @@ class AuctionFlowTest(unittest.TestCase):
             self.admin.request("admin/auction/start", "POST", {"auction_id": auction_id})[0],
             200,
         )
+        db = app.connect()
+        try:
+            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) + 1, auction_id))
+            db.commit()
+        finally:
+            db.close()
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             simultaneous = list(
@@ -125,6 +131,7 @@ class AuctionFlowTest(unittest.TestCase):
         _, live = self.alpha.request("auction")
         self.assertEqual(live["active"]["bids"][0]["team_name"], "Bravo FC")
         self.assertEqual(live["active"]["bids"][0]["amount"], 250)
+        self.assertGreaterEqual(live["active"]["ends_at"], int(time.time()) + 8)
         self.assertEqual(
             {team["name"] for team in live["teams"]}, {"Alpha FC", "Bravo FC"}
         )
@@ -173,12 +180,122 @@ class AuctionFlowTest(unittest.TestCase):
         status, _ = self.alpha.request("admin/teams")
         self.assertEqual(status, 403)
 
+    def test_sealed_auction_hides_bids_and_allows_one_bid_per_team(self) -> None:
+        for client, username, team_name in [
+            (self.alpha, "alpha", "Alpha FC"),
+            (self.bravo, "bravo", "Bravo FC"),
+        ]:
+            self.assertEqual(
+                client.request(
+                    "register",
+                    "POST",
+                    {"username": username, "password": "pass123", "team_name": team_name},
+                )[0],
+                201,
+            )
+        self.login(self.admin, "admin", "admin123")
+        self.login(self.alpha, "alpha", "pass123")
+        self.login(self.bravo, "bravo", "pass123")
+        _, teams_payload = self.admin.request("admin/teams")
+        teams = {team["name"]: team for team in teams_payload["teams"]}
+        for team in teams.values():
+            self.assertEqual(
+                self.admin.request(
+                    "admin/funds", "POST", {"team_id": team["id"], "funds": 1000}
+                )[0],
+                200,
+            )
+        player_id = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))[1]["id"]
+        self.assertEqual(
+            self.admin.request(
+                "admin/auction/queue",
+                "POST",
+                {
+                    "player_id": player_id,
+                    "auction_type": "sealed",
+                    "start_price": 100,
+                    "min_increment": 10,
+                    "duration_seconds": 10,
+                },
+            )[0],
+            201,
+        )
+        _, market = self.admin.request("auction")
+        auction_id = market["queued"][0]["id"]
+        self.admin.request("admin/auction/start", "POST", {"auction_id": auction_id})
+
+        db = app.connect()
+        try:
+            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) + 1, auction_id))
+            db.commit()
+        finally:
+            db.close()
+        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 300})[0], 201)
+        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 400})[0], 400)
+        _, alpha_market = self.alpha.request("auction")
+        self.assertEqual(alpha_market["active"]["auction_type"], "sealed")
+        self.assertEqual(alpha_market["active"]["bids"], [])
+        self.assertEqual(alpha_market["active"]["bid_count"], 1)
+        self.assertTrue(alpha_market["active"]["has_bid"])
+        self.assertGreaterEqual(alpha_market["active"]["ends_at"], int(time.time()) + 8)
+
+        self.assertEqual(self.bravo.request("bid", "POST", {"amount": 350})[0], 201)
+        _, admin_market = self.admin.request("auction")
+        self.assertEqual(admin_market["active"]["bids"], [])
+        self.assertEqual(admin_market["active"]["bid_count"], 2)
+        db = app.connect()
+        try:
+            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) - 1, auction_id))
+            db.commit()
+        finally:
+            db.close()
+        _, settled = self.admin.request("auction")
+        self.assertEqual(settled["recent"][0]["winner_team_name"], "Bravo FC")
+        self.assertEqual(settled["recent"][0]["final_price"], 350)
+
+    def test_team_rename_and_admin_account_release(self) -> None:
+        self.alpha.request(
+            "register",
+            "POST",
+            {"username": "alpha", "password": "pass1", "team_name": "Alpha FC"},
+        )
+        self.login(self.alpha, "alpha", "pass1")
+        self.login(self.admin, "admin", "admin123")
+        self.assertEqual(
+            self.alpha.request("team/name", "POST", {"name": "Renamed FC"})[0], 200
+        )
+        _, profile = self.alpha.request("me")
+        self.assertEqual(profile["user"]["team_name"], "Renamed FC")
+        _, teams_payload = self.admin.request("admin/teams")
+        team = teams_payload["teams"][0]
+        self.assertEqual(team["username"], "alpha")
+        self.assertEqual(
+            self.admin.request(
+                "admin/participant/release", "POST", {"team_id": team["id"]}
+            )[0],
+            200,
+        )
+        _, released_profile = self.alpha.request("me")
+        self.assertIsNone(released_profile["user"])
+        self.assertEqual(self.alpha.request("auction")[0], 401)
+        _, teams_payload = self.admin.request("admin/teams")
+        self.assertIsNone(teams_payload["teams"][0]["participant_user_id"])
+        self.assertIsNone(teams_payload["teams"][0]["username"])
+
     def test_seed_has_expected_player_shape(self) -> None:
         players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
         self.assertEqual(len(players), 312)
         self.assertEqual(len({player["id"] for player in players}), 312)
         self.assertTrue(all(len(player["stats"]) == 6 for player in players))
         self.assertTrue(all(player["photo_path"] for player in players))
+        self.assertTrue(all(player["nationality"] for player in players))
+        self.assertTrue(all(player["club"] for player in players))
+        db = app.connect()
+        try:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(auctions)")}
+        finally:
+            db.close()
+        self.assertIn("auction_type", columns)
 
     def test_static_server_does_not_expose_parent_files(self) -> None:
         request = urllib.request.Request(f"{self.base_url}/../app.py")
