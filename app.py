@@ -36,6 +36,8 @@ REALTIME_MUTATION_PATHS = {
     "/api/admin/participant/release",
     "/api/admin/auction/queue",
     "/api/admin/auction/start",
+    "/api/admin/auction/settle",
+    "/api/admin/auction/withdraw",
 }
 
 
@@ -355,6 +357,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         )
 
     def api_post_logout(self, db: sqlite3.Connection, user: dict | None) -> None:
+        self.read_json()
         cookie = SimpleCookie(self.headers.get("Cookie", ""))
         token = cookie.get("session")
         if token:
@@ -504,6 +507,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         data = self.read_json()
         try:
             amount = int(str(data.get("amount", 0)))
+            requested_auction_id = int(data.get("auction_id", 0) or 0)
         except (TypeError, ValueError) as exc:
             raise AppError("报价必须是整数金额") from exc
         if amount <= 0:
@@ -513,6 +517,8 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             auction = db.execute("SELECT * FROM auctions WHERE status = 'active' LIMIT 1").fetchone()
             if not auction:
                 raise AppError("当前没有可报价的竞拍", HTTPStatus.CONFLICT)
+            if requested_auction_id and requested_auction_id != auction["id"]:
+                raise AppError("竞拍场次已变化，请确认当前拍品后重新报价", HTTPStatus.CONFLICT)
             if auction["starts_at"] is None or auction["ends_at"] is None or not (
                 auction["starts_at"] <= now < auction["ends_at"]
             ):
@@ -678,31 +684,68 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         require_admin(user)
         data = self.read_json()
         player_id = str(data.get("player_id", ""))
-        if db.execute("SELECT 1 FROM roster WHERE player_id = ?", (player_id,)).fetchone():
-            raise AppError("该球员已经属于某支球队")
-        if db.execute(
-            "SELECT 1 FROM auctions WHERE player_id = ? AND status IN ('queued', 'active')", (player_id,)
-        ).fetchone():
-            raise AppError("该球员已经在拍卖池中")
         auction_type = str(data.get("auction_type", "open"))
         if auction_type not in {"open", "sealed"}:
             raise AppError("竞拍方式无效")
+        try:
+            start_price = int(data.get("start_price", 0))
+            min_increment = int(data.get("min_increment", 10))
+            duration_seconds = int(data.get("duration_seconds", 30))
+        except (TypeError, ValueError) as exc:
+            raise AppError("竞拍规则必须填写整数") from exc
+        if start_price < 0 or min_increment <= 0:
+            raise AppError("起拍价不能小于零，最小加价必须大于零")
+        if not 10 <= duration_seconds <= 3600:
+            raise AppError("倒计时需要设置为 10–3600 秒")
+        start_immediately = bool(data.get("start_immediately"))
+        now = int(time.time())
         values = (
             player_id,
             auction_type,
-            int(data.get("start_price", 0)),
-            int(data.get("min_increment", 10)),
-            int(data.get("duration_seconds", 60)),
-            int(time.time()),
+            start_price,
+            min_increment,
+            duration_seconds,
+            now,
         )
-        db.execute(
-            """
-            INSERT INTO auctions(player_id, auction_type, status, start_price, min_increment, duration_seconds, created_at)
-            VALUES (?, ?, 'queued', ?, ?, ?, ?)
-            """,
-            values,
+        with AUCTION_STATE_LOCK:
+            if db.execute("SELECT 1 FROM roster WHERE player_id = ?", (player_id,)).fetchone():
+                raise AppError("该球员已经属于某支球队")
+            if db.execute(
+                "SELECT 1 FROM auctions WHERE player_id = ? AND status IN ('queued', 'active')",
+                (player_id,),
+            ).fetchone():
+                raise AppError("该球员已经在拍卖池中")
+            if start_immediately and db.execute(
+                "SELECT 1 FROM auctions WHERE status = 'active'"
+            ).fetchone():
+                raise AppError("已有一场竞拍正在进行", HTTPStatus.CONFLICT)
+            status = "active" if start_immediately else "queued"
+            cursor = db.execute(
+                """
+                INSERT INTO auctions(
+                    player_id, auction_type, status, start_price, min_increment,
+                    duration_seconds, starts_at, ends_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    *values[:2],
+                    status,
+                    *values[2:5],
+                    now if start_immediately else None,
+                    now + duration_seconds if start_immediately else None,
+                    values[5],
+                ),
+            )
+            db.commit()
+        self.send_json(
+            {
+                "ok": True,
+                "auction_id": cursor.lastrowid,
+                "status": status,
+                "ends_at": now + duration_seconds if start_immediately else None,
+            },
+            HTTPStatus.CREATED,
         )
-        self.send_json({"ok": True}, HTTPStatus.CREATED)
 
     def api_post_admin_auction_start(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
@@ -722,6 +765,50 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             )
             db.commit()
         self.send_json({"ok": True, "ends_at": now + auction["duration_seconds"]})
+
+    def api_post_admin_auction_settle(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        self.read_json()
+        with AUCTION_STATE_LOCK:
+            auction = db.execute(
+                "SELECT id FROM auctions WHERE status = 'active' LIMIT 1"
+            ).fetchone()
+            if not auction:
+                raise AppError("当前没有进行中的竞拍", HTTPStatus.CONFLICT)
+            if not db.execute(
+                "SELECT 1 FROM bids WHERE auction_id = ? LIMIT 1", (auction["id"],)
+            ).fetchone():
+                raise AppError("还没有有效报价，不能落槌成交", HTTPStatus.CONFLICT)
+            db.execute(
+                "UPDATE auctions SET ends_at = ? WHERE id = ?",
+                (int(time.time()), auction["id"]),
+            )
+            db.commit()
+            if not finish_expired_auction(db):
+                raise AppError("竞拍状态已变化，请刷新后重试", HTTPStatus.CONFLICT)
+        self.send_json({"ok": True, "auction_id": auction["id"]})
+
+    def api_post_admin_auction_withdraw(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        self.read_json()
+        with AUCTION_STATE_LOCK:
+            auction = db.execute(
+                "SELECT id FROM auctions WHERE status = 'active' LIMIT 1"
+            ).fetchone()
+            if not auction:
+                raise AppError("当前没有进行中的竞拍", HTTPStatus.CONFLICT)
+            db.execute("DELETE FROM bids WHERE auction_id = ?", (auction["id"],))
+            db.execute(
+                """
+                UPDATE auctions
+                SET status = 'queued', starts_at = NULL, ends_at = NULL,
+                    winner_team_id = NULL, final_price = NULL
+                WHERE id = ?
+                """,
+                (auction["id"],),
+            )
+            db.commit()
+        self.send_json({"ok": True, "auction_id": auction["id"]})
 
 def main() -> None:
     init_database()

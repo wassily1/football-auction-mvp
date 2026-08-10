@@ -25,7 +25,7 @@
         <p class="eyebrow">PRIVATE LEAGUE · LIVE AUCTION</p>
         <h1>把喜欢的球员，<br><em>带回你的球队。</em></h1>
         <p>管理员发起竞拍，所有朋友同步看倒计时、报价席和拍卖池。成交后球员自动进入球队阵容。</p>
-        <div class="auth-features"><span>312 名球员</span><span>实时竞价</span><span>阵容球场</span></div>
+        <div class="auth-features"><span>312 名球员</span><span>实时竞价</span><span>阵容列表</span></div>
       </div>
       <div class="auth-panel">
         <div class="auth-tabs"><button data-auth="login" class="active">登录</button><button data-auth="register">创建球队</button></div>
@@ -91,7 +91,7 @@
   <dialog id="admin-roster-dialog" class="admin-roster-dialog"><button class="dialog-close" aria-label="关闭球队阵容">×</button><div id="admin-roster-detail"></div></dialog>
   <dialog id="queue-dialog" class="queue-dialog">
     <button class="dialog-close" aria-label="关闭拍品上架">×</button>
-    <header><p class="eyebrow">AUCTION LOT</p><h2>拍品上架</h2><span>选择指定球员，或按条件随机抽卡</span></header>
+    <header><p class="eyebrow">AUCTION LOT</p><h2 id="queue-dialog-title">拍品上架</h2><span id="queue-dialog-copy">选择指定球员，或按条件随机抽卡</span></header>
     <div class="queue-tabs"><button class="active" data-queue-tab="search">搜索指定球员</button><button data-queue-tab="random">条件随机抽卡</button></div>
     <section id="queue-search-panel" class="queue-tab-panel">
       <div class="queue-search-bar"><input id="queue-search" placeholder="输入球员中文名或英文名"><span id="queue-available-count"></span></div>
@@ -110,9 +110,13 @@
     </section>
     <form id="queue-form" class="queue-rules">
       <input id="queue-player" name="player_id" type="hidden" required>
-      <div class="form-row auction-rule-grid"><label>竞拍方式<select id="auction-type" name="auction_type"><option value="open">明拍 · 实时公开报价</option><option value="sealed">暗拍 · 每队仅一次报价</option></select></label><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label id="increment-rule">最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>每次倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="60" required></label></div>
+      <div class="form-row auction-rule-grid"><label>竞拍方式<select id="auction-type" name="auction_type"><option value="open">明拍 · 实时公开报价</option><option value="sealed">暗拍 · 每队仅一次报价</option></select></label><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label id="increment-rule">最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>每次倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="30" required></label></div>
       <button id="queue-submit" class="primary-button" type="submit" disabled>加入拍卖池</button>
     </form>
+  </dialog>
+  <dialog id="bid-confirm-dialog" class="bid-confirm-dialog">
+    <button class="dialog-close" aria-label="关闭报价确认">×</button>
+    <div class="bid-confirm-content"><p class="eyebrow">CONFIRM BID</p><h2>确认提交报价？</h2><p id="bid-confirm-copy"></p><strong id="bid-confirm-amount"></strong><small id="bid-confirm-hint"></small><div><button id="bid-confirm-cancel" class="secondary-button" type="button">再想一下</button><button id="bid-confirm-submit" class="primary-button" type="button">确认报价</button></div></div>
   </dialog>
   <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
   <div id="toast" class="toast"></div>

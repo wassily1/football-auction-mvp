@@ -298,6 +298,88 @@ class AuctionFlowTest(unittest.TestCase):
         self.assertIsNone(teams_payload["teams"][0]["participant_user_id"])
         self.assertIsNone(teams_payload["teams"][0]["username"])
 
+    def test_direct_start_manual_settlement_and_withdrawal(self) -> None:
+        self.assertEqual(
+            self.alpha.request(
+                "register",
+                "POST",
+                {"username": "alpha", "password": "pass1", "team_name": "Alpha FC"},
+            )[0],
+            201,
+        )
+        self.login(self.admin, "admin", "admin123")
+        self.login(self.alpha, "alpha", "pass1")
+        _, teams_payload = self.admin.request("admin/teams")
+        team_id = teams_payload["teams"][0]["id"]
+        self.assertEqual(
+            self.admin.request(
+                "admin/funds", "POST", {"team_id": team_id, "funds": 1000}
+            )[0],
+            200,
+        )
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        status, started = self.admin.request(
+            "admin/auction/queue",
+            "POST",
+            {
+                "player_id": players[0]["id"],
+                "start_price": 100,
+                "min_increment": 10,
+                "start_immediately": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(started["status"], "active")
+        _, market = self.admin.request("auction")
+        self.assertEqual(market["active"]["duration_seconds"], 30)
+        self.assertEqual(market["queued"], [])
+        status, rejected = self.alpha.request(
+            "bid", "POST", {"amount": 100, "auction_id": started["auction_id"] + 1}
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("场次已变化", rejected["error"])
+
+        status, rejected = self.admin.request("admin/auction/settle", "POST", {})
+        self.assertEqual(status, 409)
+        self.assertIn("没有有效报价", rejected["error"])
+        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 100})[0], 201)
+        self.assertEqual(
+            self.admin.request("admin/auction/settle", "POST", {})[0], 200
+        )
+        _, settled = self.admin.request("auction")
+        self.assertIsNone(settled["active"])
+        self.assertEqual(settled["recent"][0]["status"], "sold")
+        self.assertEqual(settled["recent"][0]["final_price"], 100)
+
+        status, second = self.admin.request(
+            "admin/auction/queue",
+            "POST",
+            {
+                "player_id": players[1]["id"],
+                "start_price": 120,
+                "min_increment": 10,
+                "duration_seconds": 30,
+                "start_immediately": True,
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 120})[0], 201)
+        self.assertEqual(
+            self.admin.request("admin/auction/withdraw", "POST", {})[0], 200
+        )
+        _, withdrawn = self.admin.request("auction")
+        self.assertIsNone(withdrawn["active"])
+        self.assertEqual(withdrawn["queued"][0]["id"], second["auction_id"])
+        db = app.connect()
+        try:
+            bid_count = db.execute(
+                "SELECT COUNT(*) AS count FROM bids WHERE auction_id = ?",
+                (second["auction_id"],),
+            ).fetchone()["count"]
+        finally:
+            db.close()
+        self.assertEqual(bid_count, 0)
+
     def test_seed_has_expected_player_shape(self) -> None:
         players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
         self.assertEqual(len(players), 312)

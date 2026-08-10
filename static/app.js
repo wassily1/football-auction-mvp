@@ -14,6 +14,8 @@ const state = {
   poolTab: "queued",
   queueTab: "search",
   queueSelection: null,
+  queueStartImmediately: false,
+  pendingBid: null,
   lastSettlementId: null,
   eventSource: null,
   fallbackTimer: null,
@@ -410,11 +412,19 @@ function renderSealedStatus(active, teams) {
 }
 
 function playerShowcaseMarkup(player) {
-  return `<div class="showcase-head"><div><strong>${player.overall}</strong><span>${escapeHtml(player.primary_position)}</span></div><em>${escapeHtml(player.category)}</em></div>
-    <div class="showcase-photo">${imageMarkup(player)}<span class="showcase-role">${escapeHtml((player.roles || []).slice(0, 2).join(" · ") || player.primary_position)}</span><span class="showcase-physical">${player.height_cm || "-"} cm · ${player.weight_kg || "-"} kg</span></div>
-    <div class="showcase-name"><small>${escapeHtml(player.name_en)}</small><h2>${escapeHtml(player.name_zh)}</h2><p>${escapeHtml(player.nationality || "-")} · ${escapeHtml(player.club || "-")}</p></div>
-    <div class="showcase-data">${radarMarkup(Object.keys(player.stats), Object.values(player.stats))}${statsMarkup(player, "showcase-stats")}</div>
-    <div class="showcase-traits"><span>花式 ${player.skill_moves}★</span><span>逆足 ${player.weak_foot}★</span>${player.gold_abilities.slice(0, 2).map(value => `<b>◆ ${escapeHtml(value)}</b>`).join("")}${player.silver_abilities.slice(0, 2).map(value => `<b class="silver">◇ ${escapeHtml(value)}</b>`).join("")}</div>`;
+  const roles = (player.roles || []).flatMap(role => String(role).split("、")).filter(Boolean).slice(0, 2);
+  const abilityRow = (label, rating, abilities, tone) => `<div class="showcase-ability-row"><span>${label} <strong>${rating}★</strong></span><i class="${tone}"></i><div>${abilities.length ? abilities.map(value => `<b class="${tone}">${escapeHtml(value)}</b>`).join("") : `<small>暂无徽章</small>`}</div></div>`;
+  return `<div class="showcase-upper">
+      <div class="showcase-head"><div><strong>${player.overall}</strong><span>${escapeHtml(player.primary_position)}</span><small>${escapeHtml(player.nationality || "-")}</small></div><em>${escapeHtml(player.category)}</em></div>
+      <div class="showcase-photo">${imageMarkup(player)}</div>
+      <div class="showcase-role-lines">${roles.length ? roles.map((role, index) => `<span><b>角色${index === 0 ? "++" : "+"}</b>${escapeHtml(role)}</span>`).join("") : `<span><b>位置</b>${escapeHtml(player.primary_position)}</span>`}</div>
+      <span class="showcase-physical">${player.height_cm || "-"} cm · ${player.weight_kg || "-"} kg</span>
+    </div>
+    <div class="showcase-lower">
+      <div class="showcase-name"><small>${escapeHtml(player.name_en)}</small><h2>${escapeHtml(player.name_zh)}</h2></div>
+      <div class="showcase-data">${radarMarkup(Object.keys(player.stats), Object.values(player.stats))}${statsMarkup(player, "showcase-stats")}</div>
+      <div class="showcase-traits">${abilityRow("花式", player.skill_moves, player.gold_abilities || [], "gold")}${abilityRow("逆足", player.weak_foot, player.silver_abilities || [], "silver")}</div>
+    </div>`;
 }
 
 function formatCountdown(seconds) {
@@ -438,29 +448,49 @@ function renderBidHistory(bids) {
   $("#bid-history").innerHTML = bids.length ? bids.map((bid, index) => `<div class="history-row"><span>${String(index + 1).padStart(2, "0")}</span><div><b>${escapeHtml(bid.team_name)}</b><small>${new Date(bid.created_at * 1000).toLocaleTimeString("zh-CN")}</small></div><strong>${money(bid.amount)}</strong></div>`).join("") : `<div class="empty-copy">报价记录会按价格显示</div>`;
 }
 
-async function submitBid(event) {
+function submitBid(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const button = $("button[type=submit]", form);
+  const amount = Number(new FormData(form).get("amount"));
+  const active = state.auction?.active;
+  if (!active || !Number.isInteger(amount) || amount < Number($("input[name=amount]", form).min)) {
+    toast("请填写有效的整数报价", "error");
+    return;
+  }
+  state.pendingBid = { amount, auctionId: active.id, auctionType: active.auction_type };
+  $("#bid-confirm-copy").textContent = active.auction_type === "sealed" ? "暗拍每支球队只能提交一次，提交后不能修改。" : "报价提交成功后将进入竞价席，并把倒计时重新计满。";
+  $("#bid-confirm-amount").textContent = money(amount);
+  $("#bid-confirm-hint").textContent = `当前可用余额 ${money(state.user.funds)}`;
+  $("#bid-confirm-dialog").showModal();
+}
+
+async function confirmBid() {
+  const pending = state.pendingBid;
+  if (!pending) return;
+  const button = $("#bid-confirm-submit");
   button.disabled = true;
   try {
-    const amount = Number(new FormData(event.currentTarget).get("amount"));
-    await api("bid", { method: "POST", body: JSON.stringify({ amount }) });
-    toast(state.auction.active.auction_type === "sealed" ? "暗拍报价已密封提交" : `报价 ${money(amount)} 已进入竞价席`);
+    await api("bid", { method: "POST", body: JSON.stringify({ amount: pending.amount, auction_id: pending.auctionId }) });
+    $("#bid-confirm-dialog").close();
+    toast(pending.auctionType === "sealed" ? "暗拍报价已密封提交" : `报价 ${money(pending.amount)} 已进入竞价席`);
+    state.pendingBid = null;
     await refreshAuction();
     const input = $("#bid-form input[name=amount]");
     if (input && state.auction.active?.auction_type === "open") input.value = input.min;
   } catch (error) {
+    $("#bid-confirm-dialog").close();
+    state.pendingBid = null;
     await refreshAuction();
     toast(error.message, "error");
   } finally {
-    if (button.isConnected) button.disabled = form.classList.contains("bid-locked");
+    button.disabled = false;
   }
 }
 
-function poolCard(item) {
+function poolCard(item, active = false) {
   const player = item.player;
-  return `<div class="pool-card">${imageMarkup(player)}<div><b>${escapeHtml(player.name_zh)}</b><small>${item.auction_type === "sealed" ? "暗拍" : "明拍"} · ${player.overall} · ${escapeHtml(player.primary_position)} · 起拍 ${money(item.start_price)}</small></div><span>#${item.id}</span></div>`;
+  const bidCount = item.auction_type === "sealed" ? item.bid_count : item.bids?.length;
+  return `<div class="pool-card ${active ? "active-pool-card" : ""}">${imageMarkup(player)}<div><b>${escapeHtml(player.name_zh)}</b><small>${active ? `竞拍中 · ${bidCount || 0} ${item.auction_type === "sealed" ? "队已报价" : "次报价"}` : `${item.auction_type === "sealed" ? "暗拍" : "明拍"} · ${player.overall} · ${escapeHtml(player.primary_position)} · 起拍 ${money(item.start_price)}`}</small>${active && state.user.role === "admin" ? `<div class="pool-admin-actions"><button data-settle-auction type="button">落槌成交</button><button data-withdraw-auction type="button">撤回拍卖</button></div>` : ""}</div><span>${active ? "LIVE" : `#${item.id}`}</span></div>`;
 }
 
 function resultCard(item) {
@@ -468,18 +498,20 @@ function resultCard(item) {
 }
 
 function renderAuctionPool() {
-  const { queued, recent } = state.auction;
+  const { active, queued, recent } = state.auction;
   const collections = {
-    queued,
+    queued: active ? [active, ...queued] : queued,
     sold: recent.filter(item => item.status === "sold"),
     unsold: recent.filter(item => item.status === "unsold"),
   };
   const items = collections[state.poolTab];
   $("#pool-count").textContent = `${items.length} 人`;
   $("#auction-pool").innerHTML = items.length
-    ? items.map(item => state.poolTab === "queued" ? poolCard(item) : resultCard(item)).join("")
+    ? items.map(item => state.poolTab === "queued" ? poolCard(item, item === active) : resultCard(item)).join("")
     : `<div class="empty-copy">${state.poolTab === "queued" ? "拍卖池还是空的" : "暂无记录"}</div>`;
   $$('[data-pool-tab]').forEach(button => button.classList.toggle("active", button.dataset.poolTab === state.poolTab));
+  $("[data-settle-auction]", $("#auction-pool"))?.addEventListener("click", settleAuction);
+  $("[data-withdraw-auction]", $("#auction-pool"))?.addEventListener("click", withdrawAuction);
 }
 
 function showSettlement(result) {
@@ -500,13 +532,7 @@ async function loadRoster() {
 }
 
 function renderRoster() {
-  const positionOrder = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
-  const items = [...state.roster.roster].sort((left, right) => {
-    if (state.rosterSort === "price-desc") return right.acquired_price - left.acquired_price;
-    if (state.rosterSort === "price-asc") return left.acquired_price - right.acquired_price;
-    if (state.rosterSort === "nationality") return String(left.player.nationality).localeCompare(String(right.player.nationality), "zh-CN") || right.acquired_price - left.acquired_price;
-    return positionOrder.indexOf(left.player.primary_position) - positionOrder.indexOf(right.player.primary_position) || right.acquired_price - left.acquired_price;
-  });
+  const items = sortedRosterItems(state.roster.roster, state.rosterSort);
   const groups = new Map();
   items.forEach(item => {
     const label = state.rosterGroup === "nationality" ? (item.player.nationality || "未知国籍") : state.rosterGroup === "position" ? item.player.primary_position : "全部球员";
@@ -515,6 +541,16 @@ function renderRoster() {
   });
   $("#roster-list").innerHTML = items.length ? [...groups].map(([label, players]) => `<section class="roster-group"><header><h2>${escapeHtml(label)}</h2><span>${players.length} 人</span></header><div class="roster-cards">${players.map(rosterCardMarkup).join("")}</div></section>`).join("") : `<div class="empty-copy roster-empty">成交球员会出现在这里</div>`;
   $$("[data-player-id]", $("#roster-list")).forEach(element => element.onclick = () => openPlayer(element.dataset.playerId));
+}
+
+function sortedRosterItems(roster, sort = "position-price") {
+  const positionOrder = ["GK", "CB", "LB", "RB", "CDM", "CM", "CAM", "LM", "RM", "LW", "RW", "ST"];
+  return [...roster].sort((left, right) => {
+    if (sort === "price-desc") return right.acquired_price - left.acquired_price;
+    if (sort === "price-asc") return left.acquired_price - right.acquired_price;
+    if (sort === "nationality") return String(left.player.nationality).localeCompare(String(right.player.nationality), "zh-CN") || right.acquired_price - left.acquired_price;
+    return positionOrder.indexOf(left.player.primary_position) - positionOrder.indexOf(right.player.primary_position) || right.acquired_price - left.acquired_price;
+  });
 }
 
 function rosterCardMarkup(item) {
@@ -607,7 +643,7 @@ function selectQueuePlayer(playerId) {
   state.queueSelection = player;
   $("#queue-player").value = player.id;
   $("#queue-submit").disabled = false;
-  $("#queue-submit").textContent = `将 ${player.name_zh} 加入拍卖池`;
+  $("#queue-submit").textContent = state.queueStartImmediately ? `上架 ${player.name_zh} 并立即开拍` : `将 ${player.name_zh} 加入拍卖池`;
   $("#random-preview").innerHTML = `<div class="random-player-reveal">${imageMarkup(player)}<span><small>${escapeHtml(player.category)} · ${escapeHtml(player.primary_position)}</small><strong>${escapeHtml(player.name_zh)}</strong><em>${player.overall}</em></span></div>`;
   renderQueueSearch();
 }
@@ -626,11 +662,14 @@ function drawRandomPlayer() {
   selectQueuePlayer(candidates[secureRandomIndex(candidates.length)].id);
 }
 
-function openQueueDialog() {
+function openQueueDialog(startImmediately = false) {
+  state.queueStartImmediately = Boolean(startImmediately);
   state.queueSelection = null;
   $("#queue-player").value = "";
   $("#queue-submit").disabled = true;
-  $("#queue-submit").textContent = "加入拍卖池";
+  $("#queue-dialog-title").textContent = state.queueStartImmediately ? "上架并立即开拍" : "拍品上架";
+  $("#queue-dialog-copy").textContent = state.queueStartImmediately ? "选定球员和规则后立即开启竞价" : "选择指定球员，或按条件随机抽卡";
+  $("#queue-submit").textContent = state.queueStartImmediately ? "选择球员后立即开拍" : "加入拍卖池";
   $("#random-preview").innerHTML = `<span>点击下方按钮抽取一名球员</span>`;
   renderQueueDialog();
   $("#queue-dialog").showModal();
@@ -674,17 +713,18 @@ function renderAdminRoster() {
   const { team, roster } = state.adminRoster;
   const starters = roster.filter(item => item.lineup_role === "starter");
   const bench = roster.filter(item => item.lineup_role === "bench");
+  const groups = new Map();
+  sortedRosterItems(roster).forEach(item => {
+    const position = item.player.primary_position || "其他";
+    if (!groups.has(position)) groups.set(position, []);
+    groups.get(position).push(item);
+  });
   $("#admin-roster-detail").innerHTML = `
     <header class="admin-roster-header">
       <div><p class="eyebrow">TEAM SQUAD · READ ONLY</p><h2>${escapeHtml(team.name)}</h2><span>管理员只读查看，阵容调整仍由参与者完成</span></div>
       <div class="admin-roster-summary"><span><small>剩余资金</small><b>${money(team.funds)}</b></span><span><small>球员</small><b>${roster.length}</b></span><span><small>首发 / 替补</small><b>${starters.length} / ${bench.length}</b></span></div>
     </header>
-    <div class="admin-roster-layout">
-      <section class="pitch-panel">
-        <div class="pitch"><div class="pitch-line center-line"></div><div class="pitch-circle"></div><div class="penalty top"></div><div class="penalty bottom"></div>${starters.length ? starters.map((item, index) => fieldPlayer(item, index, starters)).join("") : `<div class="admin-empty-pitch">暂无首发球员</div>`}</div>
-      </section>
-      <section class="panel admin-roster-bench-panel"><header><div><p class="eyebrow">SUBSTITUTES</p><h2>替补席</h2></div><span>点击查看球员详情</span></header><div class="bench">${bench.length ? bench.map(item => `<button class="bench-player" data-player-id="${item.player.id}">${imageMarkup(item.player)}<span><b>${escapeHtml(item.player.name_zh)}</b><small>${item.player.overall} · ${escapeHtml(item.player.primary_position)} · ${money(item.acquired_price)}</small></span><em>查看详情</em></button>`).join("") : `<div class="empty-copy">暂无替补球员</div>`}</div></section>
-    </div>`;
+    <div class="admin-roster-list">${roster.length ? [...groups].map(([position, items]) => `<section class="roster-group"><header><h2>${escapeHtml(position)}</h2><span>${items.length} 人</span></header><div class="roster-cards">${items.map(rosterCardMarkup).join("")}</div></section>`).join("") : `<div class="empty-copy roster-empty">该球队暂无球员</div>`}</div>`;
   $$('[data-player-id]', $("#admin-roster-detail")).forEach(element => element.onclick = () => openPlayer(element.dataset.playerId));
 }
 
@@ -712,8 +752,10 @@ async function releaseParticipant(teamId) {
 function renderAdminPool() {
   if (!state.auction) return;
   const active = state.auction.active;
-  $("#admin-pool-list").innerHTML = `${active ? `<div class="admin-pool-row">${imageMarkup(active.player)}<div><b>${escapeHtml(active.player.name_zh)}</b><small>${active.auction_type === "sealed" ? "暗拍" : "明拍"}进行中 · ${active.auction_type === "sealed" ? active.bid_count : active.bids.length} ${active.auction_type === "sealed" ? "支球队已报价" : "次报价"}</small></div><span>${active.auction_type === "sealed" ? "金额保密" : money(active.bids[0]?.amount ?? active.start_price)}</span><button disabled>进行中</button></div>` : ""}${state.auction.queued.map(item => `<div class="admin-pool-row">${imageMarkup(item.player)}<div><b>${escapeHtml(item.player.name_zh)}</b><small>${item.auction_type === "sealed" ? "暗拍" : "明拍"} · ${item.duration_seconds} 秒 · 起拍 ${money(item.start_price)}${item.auction_type === "open" ? ` · 每次 +${money(item.min_increment)}` : ""}</small></div><span>#${item.id}</span><button data-start-auction="${item.id}" ${active ? "disabled" : ""}>开始竞拍</button></div>`).join("") || (!active ? `<div class="empty-copy">先把球员加入拍卖池</div>` : "")}`;
+  $("#admin-pool-list").innerHTML = `${active ? `<div class="admin-pool-row active-admin-pool-row">${imageMarkup(active.player)}<div><b>${escapeHtml(active.player.name_zh)}</b><small>${active.auction_type === "sealed" ? "暗拍" : "明拍"}进行中 · ${active.auction_type === "sealed" ? active.bid_count : active.bids.length} ${active.auction_type === "sealed" ? "支球队已报价" : "次报价"}</small></div><span>${active.auction_type === "sealed" ? "金额保密" : money(active.bids[0]?.amount ?? active.start_price)}</span><div class="admin-auction-actions"><button data-settle-auction>落槌成交</button><button data-withdraw-auction class="danger-action">撤回拍卖</button></div></div>` : ""}${state.auction.queued.map(item => `<div class="admin-pool-row">${imageMarkup(item.player)}<div><b>${escapeHtml(item.player.name_zh)}</b><small>${item.auction_type === "sealed" ? "暗拍" : "明拍"} · ${item.duration_seconds} 秒 · 起拍 ${money(item.start_price)}${item.auction_type === "open" ? ` · 每次 +${money(item.min_increment)}` : ""}</small></div><span>#${item.id}</span><button data-start-auction="${item.id}" ${active ? "disabled" : ""}>开始竞拍</button></div>`).join("") || (!active ? `<div class="empty-copy">先把球员加入拍卖池</div>` : "")}`;
   $$('[data-start-auction]').forEach(button => button.onclick = () => startAuction(button.dataset.startAuction));
+  $$('[data-settle-auction]', $("#admin-pool-list")).forEach(button => button.onclick = settleAuction);
+  $$('[data-withdraw-auction]', $("#admin-pool-list")).forEach(button => button.onclick = withdrawAuction);
   if (!$("#queue-dialog").open) renderQueueDialog();
 }
 
@@ -726,17 +768,37 @@ async function startAuction(auctionId) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+async function settleAuction() {
+  if (!window.confirm("确认现在落槌成交？系统将以当前最高有效报价立即结算。")) return;
+  try {
+    await api("admin/auction/settle", { method: "POST", body: "{}" });
+    toast("已落槌成交");
+    await refreshAuction();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function withdrawAuction() {
+  if (!window.confirm("确认撤回本轮拍卖？本轮全部报价会清空，球员退回待拍池。")) return;
+  try {
+    await api("admin/auction/withdraw", { method: "POST", body: "{}" });
+    toast("拍卖已撤回，球员已退回待拍池");
+    await refreshAuction();
+  } catch (error) { toast(error.message, "error"); }
+}
+
 async function queueAuction(event) {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.currentTarget));
   ["start_price", "min_increment", "duration_seconds"].forEach(key => data[key] = Number(data[key]));
+  data.start_immediately = state.queueStartImmediately;
   try {
-    await api("admin/auction/queue", { method: "POST", body: JSON.stringify(data) });
-    toast("球员已加入拍卖池");
+    const result = await api("admin/auction/queue", { method: "POST", body: JSON.stringify(data) });
+    toast(result.status === "active" ? "竞拍已开始，参与者端正在同步" : "球员已加入拍卖池");
     $("#queue-dialog").close();
     state.queueSelection = null;
     await Promise.all([loadPlayers(), refreshAuction()]);
     renderAdminPool();
+    if (result.status === "active") navigate("market");
   } catch (error) { toast(error.message, "error"); }
 }
 
@@ -768,8 +830,8 @@ $("#player-search").oninput = () => { state.playerPage = 1; renderPlayers(); };
 $("#roster-group").onchange = event => { state.rosterGroup = event.currentTarget.value; renderRoster(); };
 $("#roster-sort").onchange = event => { state.rosterSort = event.currentTarget.value; renderRoster(); };
 $("#queue-form").onsubmit = queueAuction;
-$("#open-queue-dialog").onclick = openQueueDialog;
-$("#market-queue-shortcut").onclick = openQueueDialog;
+$("#open-queue-dialog").onclick = () => openQueueDialog(false);
+$("#market-queue-shortcut").onclick = () => openQueueDialog(true);
 $("#queue-dialog .dialog-close").onclick = () => $("#queue-dialog").close();
 $("#queue-dialog").onclick = event => { if (event.target === $("#queue-dialog")) $("#queue-dialog").close(); };
 $$('[data-queue-tab]').forEach(button => button.onclick = () => switchQueueTab(button.dataset.queueTab));
@@ -786,6 +848,10 @@ $("#auction-type").onchange = event => {
 $$('[data-pool-tab]').forEach(button => button.onclick = () => { state.poolTab = button.dataset.poolTab; renderAuctionPool(); });
 $("#settlement-close").onclick = () => $("#settlement-dialog").close();
 $("#settlement-dialog").onclick = event => { if (event.target === $("#settlement-dialog")) $("#settlement-dialog").close(); };
+$("#bid-confirm-submit").onclick = confirmBid;
+$("#bid-confirm-cancel").onclick = () => { state.pendingBid = null; $("#bid-confirm-dialog").close(); };
+$("#bid-confirm-dialog .dialog-close").onclick = () => { state.pendingBid = null; $("#bid-confirm-dialog").close(); };
+$("#bid-confirm-dialog").onclick = event => { if (event.target === $("#bid-confirm-dialog")) { state.pendingBid = null; $("#bid-confirm-dialog").close(); } };
 $("#player-dialog .dialog-close").onclick = () => $("#player-dialog").close();
 $("#player-dialog").onclick = event => { if (event.target === $("#player-dialog")) $("#player-dialog").close(); };
 $("#admin-roster-dialog .dialog-close").onclick = () => $("#admin-roster-dialog").close();
