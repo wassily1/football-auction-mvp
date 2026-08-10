@@ -110,26 +110,38 @@ class AuctionFlowTest(unittest.TestCase):
         )
         db = app.connect()
         try:
-            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) + 1, auction_id))
+            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) + 3, auction_id))
             db.commit()
         finally:
             db.close()
 
+        status, rejected = self.alpha.request("bid", "POST", {"amount": 100.5})
+        self.assertEqual(status, 400)
+        self.assertIn("整数金额", rejected["error"])
         with ThreadPoolExecutor(max_workers=2) as executor:
             simultaneous = list(
                 executor.map(
-                    lambda client: client.request("bid", "POST", {"amount": 200})[0],
+                    lambda client: client.request("bid", "POST", {"amount": 200}),
                     [self.alpha, self.bravo],
                 )
             )
-        self.assertEqual(sorted(simultaneous), [201, 400])
-        self.assertEqual(self.bravo.request("bid", "POST", {"amount": 250})[0], 201)
-        status, rejected = self.alpha.request("bid", "POST", {"amount": 255})
+        self.assertEqual(sorted(status for status, _ in simultaneous), [201, 400])
+        if simultaneous[0][0] == 201:
+            current_leader, challenger = self.alpha, self.bravo
+            winning_team_name = "Bravo FC"
+        else:
+            current_leader, challenger = self.bravo, self.alpha
+            winning_team_name = "Alpha FC"
+        status, rejected = current_leader.request("bid", "POST", {"amount": 220})
+        self.assertEqual(status, 409)
+        self.assertIn("最高报价方", rejected["error"])
+        self.assertEqual(challenger.request("bid", "POST", {"amount": 250})[0], 201)
+        status, rejected = current_leader.request("bid", "POST", {"amount": 255})
         self.assertEqual(status, 400)
         self.assertIn("最低有效报价", rejected["error"])
 
         _, live = self.alpha.request("auction")
-        self.assertEqual(live["active"]["bids"][0]["team_name"], "Bravo FC")
+        self.assertEqual(live["active"]["bids"][0]["team_name"], winning_team_name)
         self.assertEqual(live["active"]["bids"][0]["amount"], 250)
         self.assertGreaterEqual(live["active"]["ends_at"], int(time.time()) + 8)
         self.assertEqual(
@@ -143,31 +155,35 @@ class AuctionFlowTest(unittest.TestCase):
             db.commit()
         finally:
             db.close()
+        status, rejected = current_leader.request("bid", "POST", {"amount": 300})
+        self.assertEqual(status, 409)
+        self.assertIn("没有可报价", rejected["error"])
         _, result = self.alpha.request("auction")
         self.assertIsNone(result["active"])
-        self.assertEqual(result["recent"][0]["winner_team_name"], "Bravo FC")
+        self.assertEqual(result["recent"][0]["winner_team_name"], winning_team_name)
         self.assertEqual(result["recent"][0]["final_price"], 250)
 
-        _, roster = self.bravo.request("roster")
+        _, roster = challenger.request("roster")
         self.assertEqual(roster["team"]["funds"], 750)
         self.assertEqual(len(roster["roster"]), 1)
         self.assertEqual(roster["roster"][0]["lineup_role"], "bench")
         self.assertEqual(
-            self.bravo.request("lineup/toggle", "POST", {"player_id": player_id})[0], 200
+            challenger.request("lineup/toggle", "POST", {"player_id": player_id})[0], 200
         )
-        _, lineup = self.bravo.request("roster")
+        _, lineup = challenger.request("roster")
         self.assertEqual(lineup["roster"][0]["lineup_role"], "starter")
 
         status, admin_roster = self.admin.request(
-            f"roster?team_id={teams['Bravo FC']['id']}"
+            f"roster?team_id={teams[winning_team_name]['id']}"
         )
         self.assertEqual(status, 200)
-        self.assertEqual(admin_roster["team"]["name"], "Bravo FC")
+        self.assertEqual(admin_roster["team"]["name"], winning_team_name)
         self.assertEqual(admin_roster["team"]["funds"], 750)
         self.assertEqual(admin_roster["roster"][0]["player"]["id"], player_id)
         self.assertEqual(admin_roster["roster"][0]["lineup_role"], "starter")
 
-        status, _ = self.alpha.request(f"roster?team_id={teams['Bravo FC']['id']}")
+        losing_client = self.bravo if challenger is self.alpha else self.alpha
+        status, _ = losing_client.request(f"roster?team_id={teams[winning_team_name]['id']}")
         self.assertEqual(status, 403)
 
     def test_participant_cannot_use_admin_routes(self) -> None:
@@ -231,7 +247,7 @@ class AuctionFlowTest(unittest.TestCase):
         finally:
             db.close()
         self.assertEqual(self.alpha.request("bid", "POST", {"amount": 300})[0], 201)
-        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 400})[0], 400)
+        self.assertEqual(self.alpha.request("bid", "POST", {"amount": 400})[0], 409)
         _, alpha_market = self.alpha.request("auction")
         self.assertEqual(alpha_market["active"]["auction_type"], "sealed")
         self.assertEqual(alpha_market["active"]["bids"], [])

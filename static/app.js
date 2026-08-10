@@ -15,7 +15,12 @@ const state = {
   queueTab: "search",
   queueSelection: null,
   lastSettlementId: null,
-  pollTimer: null,
+  eventSource: null,
+  fallbackTimer: null,
+  clockTimer: null,
+  serverClockAt: 0,
+  clockAuctionId: null,
+  expiryRefreshId: null,
   toastTimer: null,
 };
 
@@ -25,8 +30,11 @@ const money = value => `${Number(value || 0).toLocaleString("zh-CN")} 万`;
 const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[char]));
 
 function teamColor(value) {
+  const palette = ["#d4a51f", "#287fd1", "#d84b4b", "#31a36b", "#8b5bd6", "#db6d22", "#1aa7a8", "#c33f85", "#6574d8", "#70a22b", "#b54ad1", "#267bb0"];
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric > 0) return palette[(numeric - 1) % palette.length];
   const hash = [...String(value || "球队")].reduce((total, char) => ((total << 5) - total + char.charCodeAt(0)) | 0, 0);
-  return `hsl(${Math.abs(hash) % 360} 66% 46%)`;
+  return palette[Math.abs(hash) % palette.length];
 }
 
 function teamAvatar(name, id = "") {
@@ -67,6 +75,7 @@ function statsMarkup(player, className = "") {
 }
 
 function showAuth() {
+  stopRealtime();
   $("#auth-page").hidden = false;
   $("#app-shell").hidden = true;
   $("#main-nav").hidden = true;
@@ -82,7 +91,7 @@ function showApp() {
   $$(".participant-only").forEach(element => element.hidden = state.user.role !== "participant");
   renderUserBar();
   navigate(state.user.role === "admin" && state.page === "lineup" ? "market" : state.page);
-  startPolling();
+  startRealtime();
 }
 
 function renderUserBar() {
@@ -112,15 +121,35 @@ function navigate(page) {
   if (page === "admin") loadAdmin();
 }
 
-function startPolling() {
-  clearInterval(state.pollTimer);
-  refreshAuction();
-  state.pollTimer = setInterval(refreshAuction, 1000);
+function startRealtime() {
+  stopRealtime();
+  state.clockTimer = setInterval(updateAuctionClock, 100);
+  state.fallbackTimer = setInterval(refreshAuction, 15000);
+  if (!("EventSource" in window)) return;
+  state.eventSource = new EventSource("/api/events");
+  state.eventSource.onopen = () => {
+    $("#market-sync").textContent = "实时同步";
+    $("#market-sync").classList.add("live");
+  };
+  state.eventSource.onmessage = () => refreshAuction();
+  state.eventSource.onerror = () => {
+    $("#market-sync").textContent = "正在重连";
+    $("#market-sync").classList.remove("live");
+  };
+}
+
+function stopRealtime() {
+  state.eventSource?.close();
+  state.eventSource = null;
+  clearInterval(state.fallbackTimer);
+  clearInterval(state.clockTimer);
+  state.fallbackTimer = null;
+  state.clockTimer = null;
 }
 
 async function logout() {
   await api("logout", { method: "POST", body: "{}" });
-  clearInterval(state.pollTimer);
+  stopRealtime();
   state.user = null;
   state.auction = null;
   state.roster = null;
@@ -214,6 +243,16 @@ async function refreshAuction() {
   try {
     const previousActive = state.auction?.active;
     state.auction = await api("auction");
+    state.serverClockAt = performance.now();
+    if (state.clockAuctionId !== state.auction.active?.id) {
+      state.clockAuctionId = state.auction.active?.id || null;
+      state.expiryRefreshId = null;
+    }
+    const currentTeam = state.auction.teams.find(team => team.id === state.user.team_id);
+    if (currentTeam && currentTeam.funds !== state.user.funds) {
+      state.user.funds = currentTeam.funds;
+      renderUserBar();
+    }
     if (previousActive && !state.auction.active) {
       const result = state.auction.recent.find(item => item.id === previousActive.id);
       if (result && state.lastSettlementId !== result.id) showSettlement(result);
@@ -228,7 +267,7 @@ async function refreshAuction() {
     if (state.user.role === "admin" && state.page === "admin") renderAdminPool();
   } catch (error) {
     if (error.status === 401) {
-      clearInterval(state.pollTimer);
+      stopRealtime();
       state.user = null;
       state.auction = null;
       state.renderedAuctionKey = null;
@@ -317,25 +356,50 @@ function bindBidComposer(active) {
 }
 
 function updateAuctionStage(active, serverTime, minimum) {
-  const remaining = Math.max(0, active.ends_at - serverTime);
-  const progress = Math.min(1, remaining / active.duration_seconds);
-  $("#countdown").textContent = formatCountdown(remaining);
-  $("#countdown-hint").textContent = remaining <= 10 ? "即将落槌" : "有效报价后重新计时";
-  $(".countdown-orbit", $("#auction-stage")).style.setProperty("--progress", progress);
+  updateCountdown(active, serverTime);
   if (active.auction_type === "sealed") {
     $("#live-price-value").textContent = `${active.bid_count} / ${state.auction.teams.length}`;
     $("#live-price-leader").textContent = "报价金额将在结束后揭晓";
     $("#bid-guidance").textContent = state.user.role === "participant" ? (active.has_bid ? "你的唯一报价已提交" : `最低报价 ${money(minimum)} · 可用余额 ${money(state.user.funds)}`) : `暗拍进行中 · 已有 ${active.bid_count} 支球队提交`;
   } else {
     const topBid = active.bids[0];
+    const ownLeader = state.user.role === "participant" && topBid?.team_id === state.user.team_id;
     $("#live-price-value").textContent = money(topBid?.amount ?? active.start_price);
     $("#live-price-leader").textContent = topBid ? topBid.team_name : "等待第一份报价";
-    $("#bid-guidance").textContent = state.user.role === "participant" ? `当前最低有效报价 ${money(minimum)} · 可用余额 ${money(state.user.funds)}` : "管理员视角 · 所有参与者报价正在实时同步";
+    $("#bid-guidance").textContent = state.user.role === "participant" ? (ownLeader ? "你正在领先 · 其他球队报价前不能继续自我加价" : `当前最低有效报价 ${money(minimum)} · 可用余额 ${money(state.user.funds)}`) : "管理员视角 · 所有参与者报价正在实时同步";
+    const form = $("#bid-form");
+    if (form) {
+      form.classList.toggle("bid-locked", ownLeader);
+      $$("button,input", form).forEach(control => control.disabled = ownLeader);
+      $(".bid-submit", form).textContent = ownLeader ? "当前最高报价" : "举牌确认报价";
+    }
   }
   const input = $("#bid-form input[name=amount]");
   if (input) {
     input.min = minimum;
     input.classList.toggle("invalid", Number(input.value) < minimum);
+  }
+}
+
+function updateCountdown(active, serverTime) {
+  const countdown = $("#countdown");
+  const orbit = $(".countdown-orbit", $("#auction-stage"));
+  if (!countdown || !orbit) return;
+  const remaining = Math.max(0, active.ends_at - serverTime);
+  const progress = Math.max(0, Math.min(1, remaining / active.duration_seconds));
+  countdown.textContent = formatCountdown(remaining);
+  $("#countdown-hint").textContent = remaining <= 10 ? "即将落槌" : "有效报价后重新计时";
+  orbit.style.setProperty("--progress", progress);
+}
+
+function updateAuctionClock() {
+  const active = state.auction?.active;
+  if (!active || !state.serverClockAt) return;
+  const serverTime = state.auction.server_time + (performance.now() - state.serverClockAt) / 1000;
+  updateCountdown(active, serverTime);
+  if (serverTime >= active.ends_at && state.expiryRefreshId !== active.id) {
+    state.expiryRefreshId = active.id;
+    refreshAuction();
   }
 }
 
@@ -354,7 +418,7 @@ function playerShowcaseMarkup(player) {
 }
 
 function formatCountdown(seconds) {
-  const safe = Math.max(0, seconds);
+  const safe = Math.ceil(Math.max(0, seconds));
   const minutes = Math.floor(safe / 60);
   return `${String(minutes).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
 }
@@ -376,7 +440,8 @@ function renderBidHistory(bids) {
 
 async function submitBid(event) {
   event.preventDefault();
-  const button = $("button[type=submit]", event.currentTarget);
+  const form = event.currentTarget;
+  const button = $("button[type=submit]", form);
   button.disabled = true;
   try {
     const amount = Number(new FormData(event.currentTarget).get("amount"));
@@ -385,8 +450,12 @@ async function submitBid(event) {
     await refreshAuction();
     const input = $("#bid-form input[name=amount]");
     if (input && state.auction.active?.auction_type === "open") input.value = input.min;
-  } catch (error) { toast(error.message, "error"); }
-  finally { button.disabled = false; }
+  } catch (error) {
+    await refreshAuction();
+    toast(error.message, "error");
+  } finally {
+    if (button.isConnected) button.disabled = form.classList.contains("bid-locked");
+  }
 }
 
 function poolCard(item) {
