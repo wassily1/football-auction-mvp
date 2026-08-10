@@ -416,6 +416,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                     revision = current_revision
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError):
+            self.close_connection = True
             return
 
     def api_get_auction(self, db: sqlite3.Connection, user: dict | None) -> None:
