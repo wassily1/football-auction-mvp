@@ -2,6 +2,8 @@ const state = {
   user: null,
   players: [],
   auction: null,
+  auctionHistory: [],
+  reviewAuctionId: null,
   roster: null,
   adminRoster: null,
   page: "market",
@@ -15,6 +17,8 @@ const state = {
   queueTab: "search",
   queueSelection: null,
   queueStartImmediately: false,
+  drawingPlayer: false,
+  drawRevealToken: 0,
   pendingBid: null,
   lastSettlementId: null,
   eventSource: null,
@@ -119,6 +123,7 @@ function navigate(page) {
   $$("#main-nav button").forEach(button => button.classList.toggle("active", button.dataset.page === page));
   window.scrollTo({ top: 0, behavior: "instant" });
   if (page === "players") renderPlayers();
+  if (page === "history") loadAuctionHistory();
   if (page === "lineup") loadRoster();
   if (page === "admin") loadAdmin();
 }
@@ -154,6 +159,8 @@ async function logout() {
   stopRealtime();
   state.user = null;
   state.auction = null;
+  state.auctionHistory = [];
+  state.reviewAuctionId = null;
   state.roster = null;
   state.renderedAuctionKey = null;
   showAuth();
@@ -209,6 +216,7 @@ function renderPlayers() {
 function openPlayer(playerId) {
   const player = state.players.find(item => String(item.id) === String(playerId))
     || state.auction?.active?.player
+    || state.auctionHistory.find(item => String(item.player.id) === String(playerId))?.player
     || state.roster?.roster.find(item => String(item.player.id) === String(playerId))?.player
     || state.adminRoster?.roster.find(item => String(item.player.id) === String(playerId))?.player;
   if (!player) return;
@@ -257,11 +265,13 @@ async function refreshAuction() {
     }
     if (previousActive && !state.auction.active) {
       const result = state.auction.recent.find(item => item.id === previousActive.id);
+      if (result) state.reviewAuctionId = result.id;
       if (result && state.lastSettlementId !== result.id) showSettlement(result);
       const profile = await api("me");
       state.user = profile.user;
       renderUserBar();
       await loadPlayers();
+      if (state.page === "history") await loadAuctionHistory();
     }
     $("#market-sync").textContent = "实时同步";
     $("#market-sync").classList.add("live");
@@ -286,6 +296,11 @@ function renderAuction() {
   const { active, queued, server_time: serverTime } = state.auction;
   renderAuctionPool();
   if (!active) {
+    const review = reviewAuctionRecord();
+    if (review) {
+      renderAuctionReview(review);
+      return;
+    }
     if (state.renderedAuctionKey !== "empty") {
       $("#auction-player-card").className = "auction-player-card empty-player-card";
       $("#auction-player-card").innerHTML = `<div><span>NO ACTIVE LOT</span><strong>等待拍品</strong><small>管理员开启竞拍后，球员完整信息会显示在这里。</small></div>`;
@@ -326,6 +341,32 @@ function renderAuction() {
     renderBidSeats(active.bids, state.auction.teams || []);
     renderBidHistory(active.bids);
   }
+}
+
+function reviewAuctionRecord() {
+  const records = [...(state.auction?.recent || []), ...state.auctionHistory];
+  return records.find(item => item.id === state.reviewAuctionId) || state.auction?.recent?.[0] || null;
+}
+
+function renderAuctionReview(record) {
+  const sold = record.status === "sold";
+  const renderKey = `review:${record.id}:${record.bids?.length || 0}`;
+  if (state.renderedAuctionKey !== renderKey) {
+    $("#auction-player-card").className = "auction-player-card review-player-card";
+    $("#auction-player-card").innerHTML = playerShowcaseMarkup(record.player);
+    $("#auction-player-card").onclick = () => openPlayer(record.player.id);
+    $("#auction-stage").className = `auction-stage review-stage ${record.auction_type === "sealed" ? "sealed-stage" : ""}`;
+    $("#auction-stage").innerHTML = `
+      <div class="auction-mode"><span class="active">${record.auction_type === "sealed" ? "暗拍" : "明拍"}</span><span>只读复盘</span></div>
+      <div class="countdown-orbit review-orbit"><div><small>拍卖结果</small><strong>${sold ? "成交" : "流拍"}</strong><span>场次 #${record.id}</span></div></div>
+      <div class="live-price"><small>${sold ? "最终成交价" : "本轮结果"}</small><strong>${sold ? money(record.final_price) : "无人成交"}</strong><span>${sold ? escapeHtml(record.winner_team_name) : "拍品未售出"}</span></div>
+      <div class="review-summary"><span><small>起拍价</small><b>${money(record.start_price)}</b></span><span><small>报价球队</small><b>${record.bid_count || 0} 支</b></span><span><small>结束时间</small><b>${new Date(record.ends_at * 1000).toLocaleString("zh-CN")}</b></span></div>
+      <p class="spectator-note">竞拍已经结束，球员信息、竞价席与全部报价保留供复盘查看。</p>`;
+    state.renderedAuctionKey = renderKey;
+  }
+  renderBidSeats(record.bids || [], state.auction.teams || []);
+  renderBidHistory(record.bids || []);
+  $("#bid-count").textContent = `${record.bids?.length || 0} 条报价`;
 }
 
 function bidComposerMarkup(active, canBid, minimum) {
@@ -494,7 +535,7 @@ function poolCard(item, active = false) {
 }
 
 function resultCard(item) {
-  return `<div class="result-card">${imageMarkup(item.player)}<div><b>${escapeHtml(item.player.name_zh)}</b><small>${item.status === "sold" ? escapeHtml(item.winner_team_name) : "流拍"}</small></div><span class="result-status">${item.status === "sold" ? money(item.final_price) : "UNSOLD"}</span></div>`;
+  return `<button type="button" class="result-card" data-review-auction="${item.id}">${imageMarkup(item.player)}<div><b>${escapeHtml(item.player.name_zh)}</b><small>${item.auction_type === "sealed" ? "暗拍" : "明拍"} · ${item.status === "sold" ? escapeHtml(item.winner_team_name) : "流拍"}</small></div><span class="result-status">${item.status === "sold" ? money(item.final_price) : "UNSOLD"}</span></button>`;
 }
 
 function renderAuctionPool() {
@@ -512,6 +553,48 @@ function renderAuctionPool() {
   $$('[data-pool-tab]').forEach(button => button.classList.toggle("active", button.dataset.poolTab === state.poolTab));
   $("[data-settle-auction]", $("#auction-pool"))?.addEventListener("click", settleAuction);
   $("[data-withdraw-auction]", $("#auction-pool"))?.addEventListener("click", withdrawAuction);
+  $$("[data-review-auction]", $("#auction-pool")).forEach(button => button.onclick = () => openAuctionReview(Number(button.dataset.reviewAuction)));
+}
+
+async function loadAuctionHistory() {
+  try {
+    const payload = await api("auction/history");
+    state.auctionHistory = payload.auctions;
+    renderAuctionHistory();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderAuctionHistory() {
+  const type = $("#history-type-filter").value;
+  const status = $("#history-status-filter").value;
+  const records = state.auctionHistory.filter(item => (!type || item.auction_type === type) && (!status || item.status === status));
+  const soldCount = state.auctionHistory.filter(item => item.status === "sold").length;
+  const sealedCount = state.auctionHistory.filter(item => item.auction_type === "sealed").length;
+  $("#history-summary").innerHTML = `<span><small>全部场次</small><b>${state.auctionHistory.length}</b></span><span><small>成交</small><b>${soldCount}</b></span><span><small>暗拍</small><b>${sealedCount}</b></span>`;
+  $("#auction-history-list").innerHTML = records.length ? records.map(historyRecordMarkup).join("") : `<div class="empty-copy history-empty">暂无符合条件的拍卖纪录</div>`;
+  $$("[data-history-review]", $("#auction-history-list")).forEach(button => button.onclick = () => openAuctionReview(Number(button.dataset.historyReview)));
+  $$("[data-history-player]", $("#auction-history-list")).forEach(button => button.onclick = () => openPlayer(button.dataset.historyPlayer));
+}
+
+function historyRecordMarkup(record) {
+  const sold = record.status === "sold";
+  const bids = record.bids || [];
+  return `<article class="auction-history-card">
+    <button type="button" class="history-player" data-history-player="${record.player.id}">${imageMarkup(record.player)}<span><small>#${record.id} · ${record.auction_type === "sealed" ? "暗拍" : "明拍"} · ${record.player.primary_position}</small><b>${escapeHtml(record.player.name_zh)}</b><em>${escapeHtml(record.player.nationality || "-")} · ${escapeHtml(record.player.club || "-")}</em></span><strong>${record.player.overall}</strong></button>
+    <div class="history-result ${sold ? "sold" : "unsold"}"><small>${sold ? "成交价" : "拍卖结果"}</small><b>${sold ? money(record.final_price) : "流拍"}</b><span>${sold ? escapeHtml(record.winner_team_name) : "无人中标"}</span></div>
+    <div class="history-meta"><span>起拍 ${money(record.start_price)}</span><span>${record.bid_count || 0} 支球队</span><span>${bids.length} 条报价</span><span>${new Date(record.ends_at * 1000).toLocaleString("zh-CN")}</span></div>
+    <details class="history-bid-details"><summary>查看全部报价</summary><div>${bids.length ? bids.map((bid, index) => `<p><span>${String(index + 1).padStart(2, "0")} · ${escapeHtml(bid.team_name)}</span><small>${new Date(bid.created_at * 1000).toLocaleTimeString("zh-CN")}</small><b>${money(bid.amount)}</b></p>`).join("") : `<span class="empty-copy">本场没有有效报价</span>`}</div></details>
+    <button type="button" class="secondary-button history-review-button" data-history-review="${record.id}">进入竞拍页复盘</button>
+  </article>`;
+}
+
+function openAuctionReview(auctionId) {
+  state.reviewAuctionId = auctionId;
+  state.renderedAuctionKey = null;
+  navigate("market");
+  renderAuction();
 }
 
 function showSettlement(result) {
@@ -634,18 +717,23 @@ function randomCandidates() {
 
 function renderRandomOptions() {
   $("#random-match-count").textContent = randomCandidates().length;
-  $("#draw-player").disabled = randomCandidates().length === 0;
+  $("#draw-player").disabled = state.drawingPlayer || randomCandidates().length === 0;
 }
 
-function selectQueuePlayer(playerId) {
+function selectQueuePlayer(playerId, updatePreview = true) {
   const player = availableQueuePlayers().find(item => String(item.id) === String(playerId));
   if (!player) return;
+  if (updatePreview && state.drawingPlayer) {
+    state.drawRevealToken += 1;
+    state.drawingPlayer = false;
+  }
   state.queueSelection = player;
   $("#queue-player").value = player.id;
   $("#queue-submit").disabled = false;
   $("#queue-submit").textContent = state.queueStartImmediately ? `上架 ${player.name_zh} 并立即开拍` : `将 ${player.name_zh} 加入拍卖池`;
-  $("#random-preview").innerHTML = `<div class="random-player-reveal">${imageMarkup(player)}<span><small>${escapeHtml(player.category)} · ${escapeHtml(player.primary_position)}</small><strong>${escapeHtml(player.name_zh)}</strong><em>${player.overall}</em></span></div>`;
+  if (updatePreview) $("#random-preview").innerHTML = `<div class="random-player-reveal">${imageMarkup(player)}<span><small>${escapeHtml(player.category)} · ${escapeHtml(player.primary_position)}</small><strong>${escapeHtml(player.name_zh)}</strong><em>${player.overall}</em></span></div>`;
   renderQueueSearch();
+  renderRandomOptions();
 }
 
 function secureRandomIndex(length) {
@@ -656,13 +744,49 @@ function secureRandomIndex(length) {
   return bucket[0] % length;
 }
 
-function drawRandomPlayer() {
+function randomRevealMarkup(player, step) {
+  const clues = [
+    ["国籍", player.nationality || "未知国籍"],
+    ["位置", player.primary_position || "未知位置"],
+    ["球队", player.club || "未知球队"],
+  ];
+  const clueMarkup = clues.map(([label, value], index) => {
+    const revealed = index < step;
+    const current = index === step - 1;
+    return `<div class="random-clue ${revealed ? "revealed" : ""} ${current ? "current" : ""}"><small>${label}</small><strong>${revealed ? escapeHtml(value) : "•••"}</strong></div>`;
+  }).join("");
+  const final = step >= 4 ? `<div class="random-final-player">${imageMarkup(player)}<span><small>${escapeHtml(player.category)}</small><strong>${escapeHtml(player.name_zh)}</strong><em>${player.overall}</em></span></div>` : `<div class="random-final-lock"><span>FINAL REVEAL</span><b>球员即将揭晓</b></div>`;
+  return `<div class="random-reveal-shell"><div class="random-reveal-title"><i></i><span>${step >= 4 ? "拍品揭晓" : "正在逐步揭晓"}</span><i></i></div><div class="random-clue-track">${clueMarkup}</div>${final}</div>`;
+}
+
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function drawRandomPlayer() {
   const candidates = randomCandidates();
   if (!candidates.length) return toast("当前条件下没有可上架球员", "error");
-  selectQueuePlayer(candidates[secureRandomIndex(candidates.length)].id);
+  const player = candidates[secureRandomIndex(candidates.length)];
+  const token = ++state.drawRevealToken;
+  state.drawingPlayer = true;
+  state.queueSelection = null;
+  $("#queue-player").value = "";
+  $("#queue-submit").disabled = true;
+  $("#draw-player").textContent = "正在揭晓…";
+  renderRandomOptions();
+  for (let step = 1; step <= 4; step += 1) {
+    if (token !== state.drawRevealToken) return;
+    $("#random-preview").innerHTML = randomRevealMarkup(player, step);
+    await wait(step === 4 ? 250 : 680);
+  }
+  if (token !== state.drawRevealToken) return;
+  state.drawingPlayer = false;
+  selectQueuePlayer(player.id, false);
+  $("#draw-player").textContent = "再抽一名";
+  renderRandomOptions();
 }
 
 function openQueueDialog(startImmediately = false) {
+  state.drawRevealToken += 1;
+  state.drawingPlayer = false;
   state.queueStartImmediately = Boolean(startImmediately);
   state.queueSelection = null;
   $("#queue-player").value = "";
@@ -671,6 +795,7 @@ function openQueueDialog(startImmediately = false) {
   $("#queue-dialog-copy").textContent = state.queueStartImmediately ? "选定球员和规则后立即开启竞价" : "选择指定球员，或按条件随机抽卡";
   $("#queue-submit").textContent = state.queueStartImmediately ? "选择球员后立即开拍" : "加入拍卖池";
   $("#random-preview").innerHTML = `<span>点击下方按钮抽取一名球员</span>`;
+  $("#draw-player").textContent = "随机抽取一名";
   renderQueueDialog();
   $("#queue-dialog").showModal();
 }
@@ -826,14 +951,15 @@ $("#register-form").onsubmit = async event => {
 };
 $$('#main-nav button').forEach(button => button.onclick = () => navigate(button.dataset.page));
 [$("#position-filter"), $("#nationality-filter"), $("#club-filter")].forEach(element => element.onchange = () => { state.playerPage = 1; renderPlayers(); });
+[$("#history-type-filter"), $("#history-status-filter")].forEach(element => element.onchange = renderAuctionHistory);
 $("#player-search").oninput = () => { state.playerPage = 1; renderPlayers(); };
 $("#roster-group").onchange = event => { state.rosterGroup = event.currentTarget.value; renderRoster(); };
 $("#roster-sort").onchange = event => { state.rosterSort = event.currentTarget.value; renderRoster(); };
 $("#queue-form").onsubmit = queueAuction;
 $("#open-queue-dialog").onclick = () => openQueueDialog(false);
 $("#market-queue-shortcut").onclick = () => openQueueDialog(true);
-$("#queue-dialog .dialog-close").onclick = () => $("#queue-dialog").close();
-$("#queue-dialog").onclick = event => { if (event.target === $("#queue-dialog")) $("#queue-dialog").close(); };
+$("#queue-dialog .dialog-close").onclick = () => { state.drawRevealToken += 1; state.drawingPlayer = false; $("#queue-dialog").close(); };
+$("#queue-dialog").onclick = event => { if (event.target === $("#queue-dialog")) { state.drawRevealToken += 1; state.drawingPlayer = false; $("#queue-dialog").close(); } };
 $$('[data-queue-tab]').forEach(button => button.onclick = () => switchQueueTab(button.dataset.queueTab));
 $("#queue-search").oninput = renderQueueSearch;
 [$("#random-min-rating"), $("#random-max-rating"), $("#random-position"), $("#random-category")].forEach(element => {

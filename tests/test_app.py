@@ -268,6 +268,47 @@ class AuctionFlowTest(unittest.TestCase):
         _, settled = self.admin.request("auction")
         self.assertEqual(settled["recent"][0]["winner_team_name"], "Bravo FC")
         self.assertEqual(settled["recent"][0]["final_price"], 350)
+        self.assertEqual(
+            [(bid["team_name"], bid["amount"]) for bid in settled["recent"][0]["bids"]],
+            [("Bravo FC", 350), ("Alpha FC", 300)],
+        )
+        status, history = self.alpha.request("auction/history")
+        self.assertEqual(status, 200)
+        self.assertEqual(history["auctions"][0]["auction_type"], "sealed")
+        self.assertEqual(
+            [bid["amount"] for bid in history["auctions"][0]["bids"]], [350, 300]
+        )
+
+    def test_auction_history_is_authenticated_and_not_limited_to_recent_results(self) -> None:
+        self.login(self.admin, "admin", "admin123")
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        now = int(time.time())
+        db = app.connect()
+        try:
+            db.executemany(
+                """
+                INSERT INTO auctions(
+                    player_id, auction_type, status, start_price, min_increment,
+                    duration_seconds, starts_at, ends_at, created_at
+                ) VALUES (?, ?, 'unsold', 100, 10, 30, ?, ?, ?)
+                """,
+                [
+                    (player["id"], "sealed" if index % 2 else "open", now, now, now + index)
+                    for index, player in enumerate(players[:10])
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        _, market = self.admin.request("auction")
+        self.assertEqual(len(market["recent"]), 8)
+        status, history = self.admin.request("auction/history")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(history["auctions"]), 10)
+        self.assertTrue(all("bids" in auction for auction in history["auctions"]))
+        anonymous = Client(self.base_url)
+        self.assertEqual(anonymous.request("auction/history")[0], 401)
 
     def test_team_rename_and_admin_account_release(self) -> None:
         self.alpha.request(

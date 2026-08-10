@@ -163,6 +163,33 @@ def player_from_row(row: sqlite3.Row) -> dict:
     return player
 
 
+def auction_bids(db: sqlite3.Connection, auction_id: int) -> list[dict]:
+    return [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT b.amount, b.created_at, t.id AS team_id, t.name AS team_name,
+                   u.username
+            FROM bids b
+            JOIN teams t ON t.id = b.team_id
+            JOIN users u ON u.id = b.user_id
+            WHERE b.auction_id = ?
+            ORDER BY b.amount DESC, b.created_at ASC, b.id ASC
+            """,
+            (auction_id,),
+        )
+    ]
+
+
+def completed_auction_payload(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    item = dict(row)
+    item["player"] = player_from_row(row)
+    item.pop("payload", None)
+    item["bids"] = auction_bids(db, row["id"])
+    item["bid_count"] = len({bid["team_id"] for bid in item["bids"]})
+    return item
+
+
 def publish_realtime_event() -> None:
     global REALTIME_REVISION
     with REALTIME_CONDITION:
@@ -439,21 +466,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             active_payload = dict(active)
             active_payload["player"] = player_from_row(active)
             del active_payload["payload"]
-            bids = [
-                dict(row)
-                for row in db.execute(
-                    """
-                    SELECT b.amount, b.created_at, t.id AS team_id, t.name AS team_name,
-                           u.username
-                    FROM bids b
-                    JOIN teams t ON t.id = b.team_id
-                    JOIN users u ON u.id = b.user_id
-                    WHERE b.auction_id = ?
-                    ORDER BY b.amount DESC, b.created_at ASC, b.id ASC
-                    """,
-                    (active["id"],),
-                )
-            ]
+            bids = auction_bids(db, active["id"])
             active_payload["bid_count"] = len({bid["team_id"] for bid in bids})
             active_payload["has_bid"] = bool(
                 user
@@ -474,7 +487,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             del item["payload"]
             queued.append(item)
         recent = [
-            {**dict(row), "player": player_from_row(row)}
+            completed_auction_payload(db, row)
             for row in db.execute(
                 """
                 SELECT a.*, p.payload, t.name AS winner_team_name
@@ -484,8 +497,6 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 """
             )
         ]
-        for item in recent:
-            item.pop("payload", None)
         teams = [
             dict(row)
             for row in db.execute("SELECT id, name, funds FROM teams ORDER BY id")
@@ -499,6 +510,22 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 "server_time": int(time.time()),
             }
         )
+
+    def api_get_auction_history(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_user(user)
+        auctions = [
+            completed_auction_payload(db, row)
+            for row in db.execute(
+                """
+                SELECT a.*, p.payload, t.name AS winner_team_name
+                FROM auctions a JOIN players p ON p.id = a.player_id
+                LEFT JOIN teams t ON t.id = a.winner_team_id
+                WHERE a.status IN ('sold', 'unsold')
+                ORDER BY a.id DESC
+                """
+            )
+        ]
+        self.send_json({"auctions": auctions})
 
     def api_post_bid(self, db: sqlite3.Connection, user: dict | None) -> None:
         user = require_user(user)

@@ -13,6 +13,7 @@
     <nav id="main-nav" hidden>
       <button data-page="market" class="active">竞价市场</button>
       <button data-page="players">球员库</button>
+      <button data-page="history">拍卖纪录</button>
       <button data-page="lineup" class="participant-only">我的阵容</button>
       <button data-page="admin" class="admin-only">管理台</button>
     </nav>
@@ -67,6 +68,15 @@
         <div class="filter-bar"><input id="player-search" placeholder="搜索球员、国籍或俱乐部"><select id="position-filter"><option value="">全部位置</option><option>GK</option><option>CB</option><option>LB</option><option>RB</option><option>CDM</option><option>CM</option><option>CAM</option><option>LM</option><option>RM</option><option>LW</option><option>RW</option><option>ST</option></select><select id="nationality-filter"><option value="">全部国籍</option></select><select id="club-filter"><option value="">全部俱乐部</option></select><span id="player-count"></span></div>
         <div id="player-grid" class="player-grid"></div>
         <nav id="player-pagination" class="pagination" aria-label="球员库分页"></nav>
+      </section>
+
+      <section id="history-page" class="page">
+        <div class="page-heading"><div><p class="eyebrow">AUCTION ARCHIVE</p><h1>完整拍卖纪录</h1></div><div id="history-summary" class="history-summary"></div></div>
+        <div class="history-toolbar">
+          <label>拍卖方式<select id="history-type-filter"><option value="">全部方式</option><option value="open">明拍</option><option value="sealed">暗拍</option></select></label>
+          <label>拍卖结果<select id="history-status-filter"><option value="">全部结果</option><option value="sold">成交</option><option value="unsold">流拍</option></select></label>
+        </div>
+        <div id="auction-history-list" class="auction-history-list"></div>
       </section>
 
       <section id="lineup-page" class="page">

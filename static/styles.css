@@ -2225,3 +2225,89 @@ grid-template-areas:"input submit" "quick quick"
 .bid-composer{grid-template-columns:1fr;grid-template-areas:"input" "quick" "submit"}
 .admin-roster-dialog .roster-cards{grid-template-columns:1fr}
 }
+
+/* Auction archive, read-only review and staged random reveal. */
+.review-stage .review-orbit{
+background:conic-gradient(var(--lime) 1turn,rgba(255,255,255,.08) 0);
+box-shadow:0 0 38px rgba(185,243,75,.16)
+}
+.review-stage .review-orbit strong{color:var(--lime);font-size:28px}
+.review-summary{
+grid-area:bid;
+width:min(100%,680px);
+display:grid;
+grid-template-columns:repeat(3,minmax(0,1fr));
+gap:8px;
+padding:10px;
+border:1px solid rgba(185,243,75,.2);
+background:rgba(4,20,29,.62)
+}
+.review-summary>span{display:grid;gap:3px;padding:8px 12px;border-left:2px solid rgba(185,243,75,.38)}
+.review-summary small{color:var(--muted);font-size:9px}
+.review-summary b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.review-player-card{box-shadow:0 28px 70px rgba(0,0,0,.32),0 0 0 1px rgba(185,243,75,.08)}
+.market-pool-panel .result-card{width:100%;color:white;text-align:left;cursor:pointer}
+.market-pool-panel .result-card:hover{border-color:rgba(185,243,75,.42);background:rgba(185,243,75,.07)}
+
+.history-summary{display:flex;gap:8px}
+.history-summary>span{min-width:92px;display:grid;padding:8px 12px;border:1px solid var(--line);background:rgba(255,255,255,.025)}
+.history-summary small{color:var(--muted);font-size:9px}.history-summary b{color:var(--lime);font-size:20px}
+.history-toolbar{display:flex;gap:10px;margin-bottom:14px;padding:12px;border:1px solid var(--line);background:rgba(5,21,30,.72)}
+.history-toolbar label{min-width:190px;color:var(--muted);font-size:10px}.history-toolbar select{margin-top:6px}
+.auction-history-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.auction-history-card{
+display:grid;
+grid-template-columns:minmax(0,1fr) 145px;
+grid-template-areas:"player result" "meta meta" "bids action";
+gap:9px;
+padding:12px;
+border:1px solid var(--line);
+background:linear-gradient(135deg,rgba(14,42,53,.88),rgba(5,19,28,.92))
+}
+.history-player{grid-area:player;min-width:0;display:grid;grid-template-columns:70px minmax(0,1fr) auto;align-items:center;gap:10px;padding:0;border:0;background:none;color:white;text-align:left;cursor:pointer}
+.history-player img{width:70px;height:78px;object-fit:contain;background:rgba(255,255,255,.04)}
+.history-player>span{min-width:0;display:grid;gap:3px}.history-player small,.history-player em{color:var(--muted);font-size:9px;font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-player b{font-size:18px}.history-player>strong{color:var(--lime);font-size:25px}
+.history-result{grid-area:result;display:grid;align-content:center;gap:3px;padding:10px;border:1px solid rgba(185,243,75,.2);background:rgba(185,243,75,.06)}
+.history-result.unsold{border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.025)}
+.history-result small,.history-result span{color:var(--muted);font-size:9px}.history-result b{color:var(--lime);font-size:20px}.history-result.unsold b{color:#d6e0df}
+.history-meta{grid-area:meta;display:flex;flex-wrap:wrap;gap:6px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06)}
+.history-meta span{padding:4px 7px;background:rgba(255,255,255,.04);color:#b8c9cd;font-size:9px}
+.history-bid-details{grid-area:bids;min-width:0}
+.history-bid-details summary{color:var(--lime);font-size:10px;cursor:pointer}
+.history-bid-details>div{max-height:150px;overflow:auto;margin-top:7px;padding-right:5px}
+.history-bid-details p{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;margin:0;padding:6px;border-bottom:1px solid rgba(255,255,255,.05);font-size:10px}
+.history-bid-details p small{color:var(--muted)}.history-bid-details p b{color:var(--lime)}
+.history-review-button{grid-area:action;align-self:start;padding:8px;font-size:10px}
+.history-empty{grid-column:1/-1;min-height:240px;display:grid;place-items:center}
+
+.random-preview{height:184px;overflow:hidden;border-style:solid;background:radial-gradient(circle at 50% 50%,rgba(185,243,75,.1),rgba(4,17,25,.86) 68%)}
+.random-reveal-shell{width:100%;height:100%;position:relative;display:grid;grid-template-rows:25px 58px 1fr;gap:7px;padding:10px 16px}
+.random-reveal-shell::after{content:"";position:absolute;inset:-50% auto -50% -20%;width:35%;transform:rotate(18deg);background:linear-gradient(90deg,transparent,rgba(255,255,255,.08),transparent);animation:random-sweep .72s ease-out}
+.random-reveal-title{display:flex;align-items:center;justify-content:center;gap:8px;color:#cce9da;font-size:9px;letter-spacing:.16em}
+.random-reveal-title i{width:50px;height:1px;background:linear-gradient(90deg,transparent,var(--lime))}.random-reveal-title i:last-child{transform:scaleX(-1)}
+.random-clue-track{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.random-clue{display:grid;align-content:center;gap:3px;padding:7px 10px;border:1px solid rgba(255,255,255,.07);background:rgba(0,0,0,.18);opacity:.42}
+.random-clue small{color:var(--muted);font-size:8px}.random-clue strong{overflow:hidden;color:#849195;font-size:12px;white-space:nowrap;text-overflow:ellipsis}
+.random-clue.revealed{opacity:1;border-color:rgba(185,243,75,.22)}
+.random-clue.revealed strong{color:white}.random-clue.current{animation:random-clue-pop .58s cubic-bezier(.2,.85,.2,1);box-shadow:0 0 25px rgba(185,243,75,.12)}
+.random-final-lock{display:grid;place-items:center;align-content:center;gap:2px;color:var(--muted)}
+.random-final-lock span{font-size:8px;letter-spacing:.2em}.random-final-lock b{font-size:15px}
+.random-final-player{display:flex;align-items:center;justify-content:center;gap:15px;min-height:0;animation:random-player-arrive .65s cubic-bezier(.18,.85,.2,1)}
+.random-final-player img{height:78px;max-width:90px;object-fit:contain;filter:drop-shadow(0 8px 16px rgba(185,243,75,.18))}
+.random-final-player span{display:grid}.random-final-player small{color:var(--muted);font-size:9px}.random-final-player strong{color:white;font-size:23px}.random-final-player em{position:absolute;right:25px;color:var(--lime);font-size:29px;font-style:normal;font-weight:950}
+@keyframes random-clue-pop{0%{opacity:0;transform:translateY(13px) scale(.94);filter:blur(5px)}70%{transform:translateY(-2px) scale(1.02)}100%{opacity:1;transform:none;filter:none}}
+@keyframes random-player-arrive{0%{opacity:0;transform:scale(.78);filter:blur(8px)}65%{transform:scale(1.04)}100%{opacity:1;transform:none;filter:none}}
+@keyframes random-sweep{from{transform:translateX(-80%) rotate(18deg)}to{transform:translateX(430%) rotate(18deg)}}
+
+@media(max-width:900px){
+.auction-history-list{grid-template-columns:1fr}
+}
+@media(max-width:700px){
+.review-summary{grid-template-columns:1fr;width:100%}.review-summary>span{padding:5px 8px}
+.history-summary{width:100%;display:grid;grid-template-columns:repeat(3,1fr)}.history-summary>span{min-width:0}
+.history-toolbar{display:grid;grid-template-columns:1fr 1fr}.history-toolbar label{min-width:0}
+.auction-history-card{grid-template-columns:1fr;grid-template-areas:"player" "result" "meta" "bids" "action"}
+.random-preview{height:210px}.random-reveal-shell{padding:10px 8px}.random-clue{padding:6px}.random-final-player em{right:12px}
+}
+@media(prefers-reduced-motion:reduce){.random-reveal-shell::after,.random-clue.current,.random-final-player{animation-duration:.01ms}}
