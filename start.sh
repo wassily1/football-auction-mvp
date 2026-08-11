@@ -15,7 +15,7 @@ fi
 
 PORT=${AUCTION_PORT:-8080}
 
-echo "朋友杯球员竞拍系统正在启动……"
+echo "HCDM杯球员竞拍系统正在启动……"
 echo "本机访问：http://127.0.0.1:${PORT}"
 
 if command -v ipconfig >/dev/null 2>&1; then
