@@ -131,7 +131,7 @@ function navigate(page) {
 function startRealtime() {
   stopRealtime();
   state.clockTimer = setInterval(updateAuctionClock, 100);
-  state.fallbackTimer = setInterval(refreshAuction, 15000);
+  state.fallbackTimer = setInterval(refreshAuction, 3000);
   if (!("EventSource" in window)) return;
   state.eventSource = new EventSource("/api/events");
   state.eventSource.onopen = () => {
