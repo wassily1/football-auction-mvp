@@ -2213,6 +2213,20 @@ grid-template-areas:"input submit" "quick quick"
 
 .admin-roster-list{display:grid;gap:14px;padding:14px;max-height:calc(88vh - 145px);overflow:auto}
 .admin-roster-dialog .roster-cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+.admin-roster-entry{min-width:0;display:grid}
+.admin-roster-entry .roster-list-card{width:100%;border-radius:11px 11px 0 0}
+.release-player-button{
+padding:8px 12px;
+border:1px solid rgba(255,109,109,.36);
+border-top:0;
+border-radius:0 0 11px 11px;
+background:rgba(255,109,109,.09);
+color:#ffb0b0;
+font-size:10px;
+font-weight:800;
+cursor:pointer
+}
+.release-player-button:hover{background:rgba(255,109,109,.17);color:white}
 .bid-confirm-dialog{width:min(430px,calc(100% - 28px));padding:0;border-color:rgba(185,243,75,.35);background:#09202a;color:white}
 .bid-confirm-content{display:grid;gap:8px;padding:27px;text-align:center}
 .bid-confirm-content h2,.bid-confirm-content p{margin:0}

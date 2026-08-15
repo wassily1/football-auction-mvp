@@ -326,18 +326,106 @@ class AuctionFlowTest(unittest.TestCase):
         _, teams_payload = self.admin.request("admin/teams")
         team = teams_payload["teams"][0]
         self.assertEqual(team["username"], "alpha")
-        self.assertEqual(
-            self.admin.request(
-                "admin/participant/release", "POST", {"team_id": team["id"]}
-            )[0],
-            200,
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        db = app.connect()
+        try:
+            db.execute("UPDATE teams SET funds = 650 WHERE id = ?", (team["id"],))
+            db.executemany(
+                """
+                INSERT INTO roster(team_id, player_id, acquired_price, acquired_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (team["id"], players[0]["id"], 120, int(time.time())),
+                    (team["id"], players[1]["id"], 230, int(time.time())),
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+        _, teams_payload = self.admin.request("admin/teams")
+        self.assertEqual(teams_payload["teams"][0]["roster_count"], 2)
+        self.assertEqual(teams_payload["teams"][0]["roster_value"], 350)
+        status, released = self.admin.request(
+            "admin/participant/release", "POST", {"team_id": team["id"]}
         )
+        self.assertEqual(status, 200)
+        self.assertEqual(released["released_players"], 2)
+        self.assertEqual(released["refunded_amount"], 350)
+        self.assertEqual(released["funds"], 1000)
         _, released_profile = self.alpha.request("me")
         self.assertIsNone(released_profile["user"])
         self.assertEqual(self.alpha.request("auction")[0], 401)
         _, teams_payload = self.admin.request("admin/teams")
         self.assertIsNone(teams_payload["teams"][0]["participant_user_id"])
         self.assertIsNone(teams_payload["teams"][0]["username"])
+        self.assertEqual(teams_payload["teams"][0]["funds"], 1000)
+        self.assertEqual(teams_payload["teams"][0]["roster_count"], 0)
+        _, admin_roster = self.admin.request(f"roster?team_id={team['id']}")
+        self.assertEqual(admin_roster["roster"], [])
+        _, player_pool = self.admin.request("players")
+        ownership = {player["id"]: player["owned"] for player in player_pool["players"]}
+        self.assertFalse(ownership[players[0]["id"]])
+        self.assertFalse(ownership[players[1]["id"]])
+
+    def test_admin_can_release_one_player_and_refund_original_price(self) -> None:
+        self.alpha.request(
+            "register",
+            "POST",
+            {"username": "alpha", "password": "pass1", "team_name": "Alpha FC"},
+        )
+        self.login(self.alpha, "alpha", "pass1")
+        self.login(self.admin, "admin", "admin123")
+        _, teams_payload = self.admin.request("admin/teams")
+        team_id = teams_payload["teams"][0]["id"]
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        db = app.connect()
+        try:
+            db.execute("UPDATE teams SET funds = 700 WHERE id = ?", (team_id,))
+            db.executemany(
+                """
+                INSERT INTO roster(team_id, player_id, acquired_price, acquired_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (team_id, players[0]["id"], 100, int(time.time())),
+                    (team_id, players[1]["id"], 200, int(time.time())),
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        status, released = self.admin.request(
+            "admin/player/release",
+            "POST",
+            {"team_id": team_id, "player_id": players[0]["id"]},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(released["player_id"], players[0]["id"])
+        self.assertEqual(released["refunded_amount"], 100)
+        self.assertEqual(released["funds"], 800)
+        _, roster = self.alpha.request("roster")
+        self.assertEqual([item["player_id"] for item in roster["roster"]], [players[1]["id"]])
+        self.assertEqual(roster["team"]["funds"], 800)
+        _, player_pool = self.admin.request("players")
+        ownership = {player["id"]: player["owned"] for player in player_pool["players"]}
+        self.assertFalse(ownership[players[0]["id"]])
+        self.assertTrue(ownership[players[1]["id"]])
+        status, _ = self.admin.request(
+            "admin/player/release",
+            "POST",
+            {"team_id": team_id, "player_id": players[0]["id"]},
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(
+            self.alpha.request(
+                "admin/player/release",
+                "POST",
+                {"team_id": team_id, "player_id": players[1]["id"]},
+            )[0],
+            403,
+        )
 
     def test_direct_start_manual_settlement_and_withdrawal(self) -> None:
         self.assertEqual(

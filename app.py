@@ -34,6 +34,7 @@ REALTIME_MUTATION_PATHS = {
     "/api/team/name",
     "/api/admin/funds",
     "/api/admin/participant/release",
+    "/api/admin/player/release",
     "/api/admin/auction/queue",
     "/api/admin/auction/start",
     "/api/admin/auction/settle",
@@ -650,7 +651,10 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             dict(row)
             for row in db.execute(
                 """
-                SELECT t.*, u.id AS participant_user_id, u.username
+                SELECT t.*, u.id AS participant_user_id, u.username,
+                       (SELECT COUNT(*) FROM roster r WHERE r.team_id = t.id) AS roster_count,
+                       (SELECT COALESCE(SUM(r.acquired_price), 0)
+                        FROM roster r WHERE r.team_id = t.id) AS roster_value
                 FROM teams t
                 LEFT JOIN users u ON u.team_id = t.id AND u.role = 'participant'
                 ORDER BY t.id
@@ -662,19 +666,84 @@ class AuctionHandler(SimpleHTTPRequestHandler):
     def api_post_admin_participant_release(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
         team_id = int(self.read_json().get("team_id", 0))
-        participant = db.execute(
-            "SELECT id, username FROM users WHERE role = 'participant' AND team_id = ?",
-            (team_id,),
-        ).fetchone()
-        if not participant:
-            raise AppError("该球队没有可释放的参与者账号", HTTPStatus.NOT_FOUND)
-        released_username = f"released-{participant['id']}-{int(time.time())}-{participant['username']}"
-        db.execute("DELETE FROM sessions WHERE user_id = ?", (participant["id"],))
-        db.execute(
-            "UPDATE users SET username = ?, team_id = NULL WHERE id = ?",
-            (released_username, participant["id"]),
+        with AUCTION_STATE_LOCK:
+            participant = db.execute(
+                "SELECT id, username FROM users WHERE role = 'participant' AND team_id = ?",
+                (team_id,),
+            ).fetchone()
+            if not participant:
+                raise AppError("该球队没有可释放的参与者账号", HTTPStatus.NOT_FOUND)
+            roster_summary = db.execute(
+                """
+                SELECT COUNT(*) AS player_count, COALESCE(SUM(acquired_price), 0) AS refund
+                FROM roster WHERE team_id = ?
+                """,
+                (team_id,),
+            ).fetchone()
+            released_username = (
+                f"released-{participant['id']}-{int(time.time())}-{participant['username']}"
+            )
+            db.execute("DELETE FROM sessions WHERE user_id = ?", (participant["id"],))
+            db.execute("DELETE FROM roster WHERE team_id = ?", (team_id,))
+            db.execute(
+                "UPDATE teams SET funds = funds + ? WHERE id = ?",
+                (roster_summary["refund"], team_id),
+            )
+            db.execute(
+                "UPDATE users SET username = ?, team_id = NULL WHERE id = ?",
+                (released_username, participant["id"]),
+            )
+            funds = db.execute("SELECT funds FROM teams WHERE id = ?", (team_id,)).fetchone()[
+                "funds"
+            ]
+            db.commit()
+        self.send_json(
+            {
+                "ok": True,
+                "released_players": roster_summary["player_count"],
+                "refunded_amount": roster_summary["refund"],
+                "funds": funds,
+            }
         )
-        self.send_json({"ok": True})
+
+    def api_post_admin_player_release(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        data = self.read_json()
+        team_id = int(data.get("team_id", 0))
+        player_id = str(data.get("player_id", "")).strip()
+        with AUCTION_STATE_LOCK:
+            roster_item = db.execute(
+                """
+                SELECT r.acquired_price, p.payload
+                FROM roster r JOIN players p ON p.id = r.player_id
+                WHERE r.team_id = ? AND r.player_id = ?
+                """,
+                (team_id, player_id),
+            ).fetchone()
+            if not roster_item:
+                raise AppError("该球员不在指定球队中", HTTPStatus.NOT_FOUND)
+            player = player_from_row(roster_item)
+            db.execute(
+                "DELETE FROM roster WHERE team_id = ? AND player_id = ?",
+                (team_id, player_id),
+            )
+            db.execute(
+                "UPDATE teams SET funds = funds + ? WHERE id = ?",
+                (roster_item["acquired_price"], team_id),
+            )
+            funds = db.execute("SELECT funds FROM teams WHERE id = ?", (team_id,)).fetchone()[
+                "funds"
+            ]
+            db.commit()
+        self.send_json(
+            {
+                "ok": True,
+                "player_id": player_id,
+                "player_name": player["name_zh"],
+                "refunded_amount": roster_item["acquired_price"],
+                "funds": funds,
+            }
+        )
 
     def api_post_admin_funds(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
