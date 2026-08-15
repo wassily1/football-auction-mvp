@@ -499,7 +499,7 @@ function submitBid(event) {
     return;
   }
   state.pendingBid = { amount, auctionId: active.id, auctionType: active.auction_type };
-  $("#bid-confirm-copy").textContent = active.auction_type === "sealed" ? "暗拍每支球队只能提交一次，提交后不能修改。" : "报价提交成功后将进入竞价席，并把倒计时重新计满。";
+  $("#bid-confirm-copy").textContent = active.auction_type === "sealed" ? "暗拍每支球队只能提交一次，提交后不能修改，也不会重置倒计时。" : "报价提交成功后将进入竞价席，并把倒计时重新计满。";
   $("#bid-confirm-amount").textContent = money(amount);
   $("#bid-confirm-hint").textContent = `当前可用余额 ${money(state.user.funds)}`;
   $("#bid-confirm-dialog").showModal();

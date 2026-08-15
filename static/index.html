@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HCDM杯 · 球员竞拍</title>
-  <link rel="stylesheet" href="/styles.css?v=20260815-2">
+  <link rel="stylesheet" href="/styles.css?v=20260815-3">
 </head>
 <body>
   <div class="noise"></div>
@@ -120,7 +120,7 @@
     </section>
     <form id="queue-form" class="queue-rules">
       <input id="queue-player" name="player_id" type="hidden" required>
-      <div class="form-row auction-rule-grid"><label>竞拍方式<select id="auction-type" name="auction_type"><option value="open">明拍 · 实时公开报价</option><option value="sealed">暗拍 · 每队仅一次报价</option></select></label><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label id="increment-rule">最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>每次倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="30" required></label></div>
+      <div class="form-row auction-rule-grid"><label>竞拍方式<select id="auction-type" name="auction_type"><option value="open">明拍 · 实时公开报价</option><option value="sealed">暗拍 · 每队仅一次报价</option></select></label><label>起拍价（万）<input name="start_price" type="number" min="0" value="100" required></label><label id="increment-rule">最小加价（万）<input name="min_increment" type="number" min="1" value="10" required></label><label>竞拍倒计时（秒）<input name="duration_seconds" type="number" min="10" max="3600" value="30" required></label></div>
       <button id="queue-submit" class="primary-button" type="submit" disabled>加入拍卖池</button>
     </form>
   </dialog>
@@ -130,6 +130,6 @@
   </dialog>
   <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
   <div id="toast" class="toast"></div>
-  <script src="/app.js?v=20260815-2"></script>
+  <script src="/app.js?v=20260815-3"></script>
 </body>
 </html>

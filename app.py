@@ -604,8 +604,10 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 "INSERT INTO bids(auction_id, team_id, user_id, amount, created_at) VALUES (?, ?, ?, ?, ?)",
                 (auction["id"], user["team_id"], user["id"], amount, now),
             )
-            ends_at = now + auction["duration_seconds"]
-            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (ends_at, auction["id"]))
+            ends_at = auction["ends_at"]
+            if auction["auction_type"] == "open":
+                ends_at = now + auction["duration_seconds"]
+                db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (ends_at, auction["id"]))
             db.commit()
         self.send_json({"ok": True, "amount": amount, "ends_at": ends_at}, HTTPStatus.CREATED)
 

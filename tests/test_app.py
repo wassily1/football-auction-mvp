@@ -239,13 +239,8 @@ class AuctionFlowTest(unittest.TestCase):
         _, market = self.admin.request("auction")
         auction_id = market["queued"][0]["id"]
         self.admin.request("admin/auction/start", "POST", {"auction_id": auction_id})
-
-        db = app.connect()
-        try:
-            db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) + 1, auction_id))
-            db.commit()
-        finally:
-            db.close()
+        _, started_market = self.admin.request("auction")
+        sealed_ends_at = started_market["active"]["ends_at"]
         self.assertEqual(self.alpha.request("bid", "POST", {"amount": 300})[0], 201)
         self.assertEqual(self.alpha.request("bid", "POST", {"amount": 400})[0], 409)
         _, alpha_market = self.alpha.request("auction")
@@ -253,12 +248,13 @@ class AuctionFlowTest(unittest.TestCase):
         self.assertEqual(alpha_market["active"]["bids"], [])
         self.assertEqual(alpha_market["active"]["bid_count"], 1)
         self.assertTrue(alpha_market["active"]["has_bid"])
-        self.assertGreaterEqual(alpha_market["active"]["ends_at"], int(time.time()) + 8)
+        self.assertEqual(alpha_market["active"]["ends_at"], sealed_ends_at)
 
         self.assertEqual(self.bravo.request("bid", "POST", {"amount": 350})[0], 201)
         _, admin_market = self.admin.request("auction")
         self.assertEqual(admin_market["active"]["bids"], [])
         self.assertEqual(admin_market["active"]["bid_count"], 2)
+        self.assertEqual(admin_market["active"]["ends_at"], sealed_ends_at)
         db = app.connect()
         try:
             db.execute("UPDATE auctions SET ends_at = ? WHERE id = ?", (int(time.time()) - 1, auction_id))
