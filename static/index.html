@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HCDM杯 · 球员竞拍</title>
-  <link rel="stylesheet" href="/styles.css?v=20260815-3">
+  <link rel="stylesheet" href="/styles.css?v=20260815-4">
 </head>
 <body>
   <div class="noise"></div>
@@ -15,6 +15,7 @@
       <button data-page="players">球员库</button>
       <button data-page="history">拍卖纪录</button>
       <button data-page="lineup" class="participant-only">我的阵容</button>
+      <button data-page="trades" class="participant-only">交易中心</button>
       <button data-page="admin" class="admin-only">管理台</button>
     </nav>
     <div id="user-bar" class="user-bar" hidden></div>
@@ -85,6 +86,22 @@
         <div id="roster-list" class="roster-list"></div>
       </section>
 
+      <section id="trades-page" class="page participant-only">
+        <div class="page-heading"><div><p class="eyebrow">TRANSFER DESK</p><h1>球队交易中心</h1></div><div class="trade-live-pill">多人确认 · 原子成交</div></div>
+        <div class="trade-layout">
+          <section class="panel trade-builder-panel">
+            <header><div><p class="eyebrow">NEW PROPOSAL</p><h2>发起交易申请</h2></div><div class="trade-party-toggle"><button type="button" class="active" data-trade-parties="2">双边交易</button><button type="button" data-trade-parties="3">三方交易</button></div></header>
+            <div class="trade-builder-body">
+              <div id="trade-team-selectors" class="trade-team-selectors"></div>
+              <div id="trade-cycle-summary" class="trade-cycle-summary"></div>
+              <div id="trade-leg-editor" class="trade-leg-editor"></div>
+              <div class="trade-builder-footer"><p>等待期间不冻结资产；最后一方同意时，服务端会重新校验全部球员与资金并一次性成交。</p><button id="submit-trade" class="primary-button" type="button">提交交易申请</button></div>
+            </div>
+          </section>
+          <section class="panel trade-list-panel"><header><div><p class="eyebrow">PROPOSALS</p><h2>交易申请</h2></div><span id="trade-pending-count">0 笔待处理</span></header><div id="trade-list" class="trade-list"></div></section>
+        </div>
+      </section>
+
       <section id="admin-page" class="page admin-only">
         <div class="page-heading"><div><p class="eyebrow">CONTROL ROOM</p><h1>管理员控制台</h1></div></div>
         <div class="admin-grid">
@@ -130,6 +147,6 @@
   </dialog>
   <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
   <div id="toast" class="toast"></div>
-  <script src="/app.js?v=20260815-3"></script>
+  <script src="/app.js?v=20260815-4"></script>
 </body>
 </html>

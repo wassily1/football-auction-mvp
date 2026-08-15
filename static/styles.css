@@ -2239,6 +2239,37 @@ cursor:pointer
 .release-player-button strong{color:#ffb0b0;font-size:12px}
 .release-player-button:hover{border-color:rgba(255,109,109,.7);background:rgba(179,52,66,.55);color:white}
 .release-player-button:hover strong{color:white}
+.trade-live-pill{padding:9px 13px;border:1px solid rgba(185,243,75,.3);border-radius:999px;background:rgba(185,243,75,.08);color:var(--lime);font-size:11px;font-weight:800}
+.trade-layout{display:grid;grid-template-columns:minmax(0,1.12fr) minmax(420px,.88fr);gap:16px;align-items:start}
+.trade-builder-panel>header,.trade-list-panel>header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.trade-party-toggle{display:flex;padding:3px;border:1px solid var(--line);border-radius:9px;background:#06151e}
+.trade-party-toggle button{padding:8px 11px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:11px;font-weight:800;cursor:pointer}
+.trade-party-toggle button.active{background:var(--lime);color:#10200e}
+.trade-builder-body{display:grid;gap:14px;padding:16px}
+.trade-team-selectors{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.trade-team-fixed,.trade-team-selectors label{min-width:0;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:rgba(5,19,28,.7)}
+.trade-team-fixed>small,.trade-team-selectors label>small{grid-column:1/-1;color:var(--muted);font-size:9px;font-weight:800;text-transform:uppercase}
+.trade-team-fixed .team-avatar{width:34px;height:34px}.trade-team-fixed b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.trade-team-selectors select{grid-column:1/-1;width:100%;min-width:0}
+.trade-cycle-summary{display:flex;flex-wrap:wrap;gap:7px}
+.trade-cycle-summary span{padding:7px 10px;border:1px solid rgba(185,243,75,.2);border-radius:7px;background:rgba(185,243,75,.06);color:#dce9e3;font-size:10px}.trade-cycle-summary b{color:var(--lime);padding:0 4px}
+.trade-leg-editor{display:grid;gap:12px}
+.trade-leg-card{overflow:hidden;border:1px solid var(--line);border-radius:13px;background:linear-gradient(135deg,rgba(16,43,57,.94),rgba(6,20,29,.94))}
+.trade-leg-card>header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.trade-leg-card>header>div{display:flex;align-items:center;gap:8px;min-width:0}.trade-leg-card>header>div:last-child{justify-content:flex-end;text-align:right}
+.trade-leg-card>header .team-avatar{width:31px;height:31px;flex:0 0 auto}.trade-leg-card>header span{min-width:0}.trade-leg-card>header small,.trade-leg-card>header b{display:block}.trade-leg-card>header small{color:var(--muted);font-size:8px}.trade-leg-card>header b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.trade-leg-card>header>em{color:var(--lime);font-size:20px;font-style:normal}
+.trade-cash-field{display:grid;grid-template-columns:1fr auto;align-items:center;gap:5px 12px;padding:11px 14px;border-bottom:1px solid var(--line)}
+.trade-cash-field>span{font-size:11px;font-weight:800}.trade-cash-field>div{display:flex;align-items:center;gap:5px}.trade-cash-field input{width:125px;height:36px}.trade-cash-field>div small{color:var(--gold);font-size:11px}.trade-cash-field>em{grid-column:1/-1;color:var(--muted);font-size:9px;font-style:normal}
+.trade-player-picker{padding:12px 14px}.trade-player-picker>strong{display:block;margin-bottom:9px;font-size:11px}.trade-player-picker>div{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;max-height:220px;overflow:auto}
+.trade-player-option{position:relative;min-width:0;display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(4,15,23,.55);cursor:pointer}.trade-player-option:has(input:checked){border-color:rgba(185,243,75,.52);background:rgba(185,243,75,.09)}
+.trade-player-option input{position:absolute;opacity:0;pointer-events:none}.trade-player-option>img{width:42px;height:45px;object-fit:contain}.trade-player-option span{min-width:0}.trade-player-option b,.trade-player-option small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.trade-player-option b{font-size:11px}.trade-player-option small{margin-top:3px;color:var(--muted);font-size:8px}.trade-player-option i{color:var(--muted);font-size:9px;font-style:normal}.trade-player-option:has(input:checked) i{color:var(--lime)}
+.trade-builder-footer{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-top:2px}.trade-builder-footer p{max-width:500px;margin:0;color:var(--muted);font-size:10px;line-height:1.5}.trade-builder-footer button{min-width:155px}
+.trade-list-panel>header>span{color:var(--lime);font-size:10px}.trade-list{display:grid;gap:11px;padding:13px;max-height:calc(100vh - 210px);overflow:auto}.trade-empty{min-height:240px}
+.trade-record{overflow:hidden;border:1px solid var(--line);border-radius:12px;background:rgba(6,21,30,.78)}.trade-record.pending{border-color:rgba(185,243,75,.3)}.trade-record.completed{border-color:rgba(65,194,129,.3)}.trade-record.rejected,.trade-record.invalid{opacity:.72}
+.trade-record>header{display:grid;gap:10px;padding:13px;border-bottom:1px solid var(--line)}.trade-record>header h3{margin:4px 0 2px;font-size:16px}.trade-record>header>div>small{color:var(--muted);font-size:9px}.trade-status{padding:3px 7px;border-radius:999px;background:rgba(185,243,75,.12);color:var(--lime);font-size:8px;font-weight:900}.trade-record.completed .trade-status{background:rgba(65,194,129,.13);color:#82e1ad}.trade-record.rejected .trade-status,.trade-record.invalid .trade-status,.trade-record.cancelled .trade-status{background:rgba(255,109,109,.1);color:#ffaaaa}
+.trade-responses{display:flex;flex-wrap:wrap;gap:6px}.trade-response{display:grid;grid-template-columns:25px auto;align-items:center;column-gap:6px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:rgba(0,0,0,.15)}.trade-response .team-avatar{grid-row:1/3;width:25px;height:25px;font-size:9px}.trade-response b{font-size:9px}.trade-response small{color:var(--muted);font-size:8px}.trade-response.accepted{border-color:rgba(65,194,129,.3)}.trade-response.accepted small{color:#82e1ad}.trade-response.rejected{border-color:rgba(255,109,109,.3)}.trade-response.rejected small{color:#ffaaaa}
+.trade-leg-summaries{display:grid;gap:7px;padding:10px}.trade-leg-summary{padding:9px;border:1px solid rgba(255,255,255,.06);border-radius:8px;background:rgba(0,0,0,.13)}.trade-leg-summary>header{display:flex;align-items:center;gap:7px;margin-bottom:7px}.trade-leg-summary>header b{font-size:10px}.trade-leg-summary>header span{color:var(--lime)}.trade-leg-summary>div{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.trade-leg-summary button{display:flex;align-items:center;gap:5px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:#102a37;color:white;text-align:left;cursor:pointer}.trade-leg-summary button img{width:28px;height:29px;object-fit:contain}.trade-leg-summary button span,.trade-leg-summary button small{display:block}.trade-leg-summary button span{font-size:9px}.trade-leg-summary button small{color:var(--muted);font-size:7px}.trade-leg-summary em{color:var(--muted);font-size:9px}.trade-leg-summary>div>strong{margin-left:auto;color:var(--gold);font-size:11px}
+.trade-record>footer{display:flex;justify-content:flex-end;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}.trade-record>footer button{min-height:36px;padding:0 14px;border-radius:7px;font-size:10px;font-weight:900;cursor:pointer}.trade-accept{border:0;background:var(--lime);color:#10200e}.trade-reject{border:1px solid rgba(255,109,109,.36);background:rgba(255,109,109,.08);color:#ffaaaa}
 .bid-confirm-dialog{width:min(430px,calc(100% - 28px));padding:0;border-color:rgba(185,243,75,.35);background:#09202a;color:white}
 .bid-confirm-content{display:grid;gap:8px;padding:27px;text-align:center}
 .bid-confirm-content h2,.bid-confirm-content p{margin:0}
@@ -2246,10 +2277,14 @@ cursor:pointer
 .bid-confirm-content>strong{color:var(--lime);font-size:38px}
 .bid-confirm-content>div{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}
 
+@media(max-width:1150px){
+.trade-layout{grid-template-columns:1fr}.trade-list{max-height:none}
+}
 @media(max-width:700px){
 .auction-workbench .auction-stage{display:flex}
 .bid-composer{grid-template-columns:1fr;grid-template-areas:"input" "quick" "submit"}
 .admin-roster-dialog .roster-cards{grid-template-columns:1fr}
+.trade-layout{grid-template-columns:1fr}.trade-team-selectors{grid-template-columns:1fr}.trade-player-picker>div{grid-template-columns:1fr}.trade-builder-footer{display:grid}.trade-builder-footer button{width:100%}.trade-list{max-height:none}
 }
 
 /* Auction archive, read-only review and staged random reveal. */

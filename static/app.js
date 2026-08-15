@@ -6,6 +6,10 @@ const state = {
   reviewAuctionId: null,
   roster: null,
   adminRoster: null,
+  trades: [],
+  tradeOptions: [],
+  tradePartyCount: 2,
+  tradeSelectedTeamIds: [],
   page: "market",
   playerPage: 1,
   playerPageSize: 20,
@@ -96,7 +100,7 @@ function showApp() {
   $$(".admin-only").forEach(element => element.hidden = state.user.role !== "admin");
   $$(".participant-only").forEach(element => element.hidden = state.user.role !== "participant");
   renderUserBar();
-  navigate(state.user.role === "admin" && state.page === "lineup" ? "market" : state.page);
+  navigate(state.user.role === "admin" && ["lineup", "trades"].includes(state.page) ? "market" : state.page);
   startRealtime();
 }
 
@@ -125,6 +129,7 @@ function navigate(page) {
   if (page === "players") renderPlayers();
   if (page === "history") loadAuctionHistory();
   if (page === "lineup") loadRoster();
+  if (page === "trades") loadTradeCenter();
   if (page === "admin") loadAdmin();
 }
 
@@ -138,7 +143,10 @@ function startRealtime() {
     $("#market-sync").textContent = "实时同步";
     $("#market-sync").classList.add("live");
   };
-  state.eventSource.onmessage = () => refreshAuction();
+  state.eventSource.onmessage = () => {
+    refreshAuction();
+    if (state.page === "trades" && state.user?.role === "participant") refreshTrades();
+  };
   state.eventSource.onerror = () => {
     $("#market-sync").textContent = "正在重连";
     $("#market-sync").classList.remove("live");
@@ -162,6 +170,8 @@ async function logout() {
   state.auctionHistory = [];
   state.reviewAuctionId = null;
   state.roster = null;
+  state.trades = [];
+  state.tradeOptions = [];
   state.renderedAuctionKey = null;
   showAuth();
 }
@@ -681,6 +691,150 @@ async function saveTeamName(event) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+async function loadTradeCenter() {
+  if (state.user?.role !== "participant") return;
+  try {
+    const [options, trades] = await Promise.all([api("trade/options"), api("trades")]);
+    state.tradeOptions = options.teams;
+    state.trades = trades.trades;
+    renderTradeBuilder();
+    renderTrades();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function refreshTrades() {
+  try {
+    const previousStatuses = new Map(state.trades.map(trade => [trade.id, trade.status]));
+    state.trades = (await api("trades")).trades;
+    const completedNow = state.trades.some(trade => trade.status === "completed" && previousStatuses.get(trade.id) === "pending");
+    if (completedNow) {
+      const [profile, options] = await Promise.all([api("me"), api("trade/options"), loadPlayers()]);
+      state.user = profile.user;
+      state.tradeOptions = options.teams;
+      renderUserBar();
+      renderTradeBuilder();
+    }
+    renderTrades();
+  } catch (error) {
+    if (error.status === 401) return bootstrap();
+  }
+}
+
+function tradeTeam(teamId) {
+  return state.tradeOptions.find(team => Number(team.id) === Number(teamId));
+}
+
+function tradeTeamOrder() {
+  return [Number(state.user.team_id), ...state.tradeSelectedTeamIds.slice(0, state.tradePartyCount - 1)];
+}
+
+function renderTradeBuilder() {
+  const ownTeamId = Number(state.user.team_id);
+  const opponents = state.tradeOptions.filter(team => Number(team.id) !== ownTeamId);
+  const required = state.tradePartyCount - 1;
+  state.tradeSelectedTeamIds = state.tradeSelectedTeamIds
+    .map(Number)
+    .filter((teamId, index, values) => teamId !== ownTeamId && opponents.some(team => team.id === teamId) && values.indexOf(teamId) === index)
+    .slice(0, required);
+  for (const team of opponents) {
+    if (state.tradeSelectedTeamIds.length >= required) break;
+    if (!state.tradeSelectedTeamIds.includes(team.id)) state.tradeSelectedTeamIds.push(team.id);
+  }
+  $$('[data-trade-parties]').forEach(button => button.classList.toggle("active", Number(button.dataset.tradeParties) === state.tradePartyCount));
+  const enoughTeams = state.tradeSelectedTeamIds.length === required;
+  const selectors = [`<div class="trade-team-fixed"><small>发起球队</small>${teamAvatar(state.user.team_name, ownTeamId)}<b>${escapeHtml(state.user.team_name)}</b></div>`];
+  for (let index = 0; index < required; index += 1) {
+    const selected = state.tradeSelectedTeamIds[index];
+    const usedByOthers = new Set(state.tradeSelectedTeamIds.filter((_, otherIndex) => otherIndex !== index));
+    selectors.push(`<label><small>${state.tradePartyCount === 2 ? "交易对方" : `参与球队 ${index + 2}`}</small><select data-trade-team-index="${index}">${opponents.filter(team => !usedByOthers.has(team.id)).map(team => `<option value="${team.id}" ${team.id === selected ? "selected" : ""}>${escapeHtml(team.name)} · ${team.roster.length} 人 · ${money(team.funds)}</option>`).join("")}</select></label>`);
+  }
+  $("#trade-team-selectors").innerHTML = enoughTeams ? selectors.join("") : `<div class="empty-copy">当前没有足够的有效参与球队发起 ${state.tradePartyCount} 方交易</div>`;
+  $$('[data-trade-team-index]').forEach(select => select.onchange = () => {
+    state.tradeSelectedTeamIds[Number(select.dataset.tradeTeamIndex)] = Number(select.value);
+    renderTradeBuilder();
+  });
+  const order = enoughTeams ? tradeTeamOrder() : [];
+  $("#trade-cycle-summary").innerHTML = order.length ? order.map((teamId, index) => {
+    const team = tradeTeam(teamId);
+    const target = tradeTeam(order[(index + 1) % order.length]);
+    return `<span>${escapeHtml(team.name)} <b>→</b> ${escapeHtml(target.name)}</span>`;
+  }).join("") : "";
+  $("#trade-leg-editor").innerHTML = order.map((teamId, index) => tradeLegEditorMarkup(tradeTeam(teamId), tradeTeam(order[(index + 1) % order.length]))).join("");
+  $("#submit-trade").disabled = !enoughTeams;
+}
+
+function tradeLegEditorMarkup(team, target) {
+  const roster = team.roster || [];
+  return `<article class="trade-leg-card" data-trade-leg-from="${team.id}" data-trade-leg-to="${target.id}">
+    <header><div>${teamAvatar(team.name, team.id)}<span><small>转出方</small><b>${escapeHtml(team.name)}</b></span></div><em>→</em><div>${teamAvatar(target.name, target.id)}<span><small>接收方</small><b>${escapeHtml(target.name)}</b></span></div></header>
+    <label class="trade-cash-field"><span>附加现金</span><div><input data-trade-cash type="number" min="0" step="1" value="0"><small>万</small></div><em>当前余额 ${money(team.funds)}</em></label>
+    <div class="trade-player-picker"><strong>选择 ${escapeHtml(team.name)} 转出的球员</strong><div>${roster.length ? roster.map(item => `<label class="trade-player-option"><input type="checkbox" data-trade-player="${item.player_id}">${imageMarkup(item.player)}<span><b>${escapeHtml(item.player.name_zh)}</b><small>${item.player.overall} · ${escapeHtml(item.player.primary_position)} · 原成交 ${money(item.acquired_price)}</small></span><i>选择</i></label>`).join("") : `<p class="empty-copy">该球队暂无可交易球员，可仅配置现金</p>`}</div></div>
+  </article>`;
+}
+
+async function submitTrade() {
+  const legs = $$("[data-trade-leg-from]").map(card => ({
+    from_team_id: Number(card.dataset.tradeLegFrom),
+    to_team_id: Number(card.dataset.tradeLegTo),
+    cash_amount: Number($("[data-trade-cash]", card).value || 0),
+    player_ids: $$('[data-trade-player]:checked', card).map(input => input.dataset.tradePlayer),
+  }));
+  if (legs.some(leg => !Number.isInteger(leg.cash_amount) || leg.cash_amount < 0)) return toast("交易现金必须是非负整数", "error");
+  if (!legs.some(leg => leg.cash_amount > 0 || leg.player_ids.length)) return toast("请至少选择一名球员或填写一笔现金", "error");
+  const teamNames = tradeTeamOrder().map(teamId => tradeTeam(teamId)?.name).filter(Boolean).join("、");
+  if (!window.confirm(`确认向 ${teamNames} 发起这笔交易？提交后需要其他参与球队全部同意。`)) return;
+  try {
+    await api("trade/create", { method: "POST", body: JSON.stringify({ legs }) });
+    toast("交易申请已发出");
+    await loadTradeCenter();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function tradeStatusLabel(status) {
+  return ({ pending: "等待确认", completed: "交易完成", rejected: "已拒绝", cancelled: "已撤回", invalid: "已失效" })[status] || status;
+}
+
+function renderTrades() {
+  if (!$("#trade-list")) return;
+  const pending = state.trades.filter(trade => trade.status === "pending");
+  $("#trade-pending-count").textContent = `${pending.length} 笔待处理`;
+  $("#trade-list").innerHTML = state.trades.length ? state.trades.map(tradeMarkup).join("") : `<div class="empty-copy trade-empty">还没有交易申请</div>`;
+  $$('[data-trade-response]').forEach(button => button.onclick = () => respondTrade(Number(button.dataset.tradeResponse), button.dataset.decision));
+  $$('[data-trade-cancel]').forEach(button => button.onclick = () => cancelTrade(Number(button.dataset.tradeCancel)));
+  $$('[data-trade-player-detail]').forEach(button => button.onclick = () => openPlayer(button.dataset.tradePlayerDetail));
+}
+
+function tradeMarkup(trade) {
+  const myTeamId = Number(state.user.team_id);
+  const myParticipant = trade.participants.find(participant => participant.team_id === myTeamId);
+  const canRespond = trade.status === "pending" && myParticipant?.response === "pending";
+  const canCancel = trade.status === "pending" && trade.creator_team_id === myTeamId;
+  const participantMarkup = trade.participants.map(participant => `<span class="trade-response ${participant.response}">${teamAvatar(participant.team_name, participant.team_id)}<b>${escapeHtml(participant.team_name)}</b><small>${participant.response === "accepted" ? "已同意" : participant.response === "rejected" ? "已拒绝" : "待确认"}</small></span>`).join("");
+  const legs = trade.legs.map(leg => `<div class="trade-leg-summary"><header><b>${escapeHtml(leg.from_team_name)}</b><span>→</span><b>${escapeHtml(leg.to_team_name)}</b></header><div>${leg.players.map(item => `<button type="button" data-trade-player-detail="${item.player_id}">${imageMarkup(item.player)}<span>${escapeHtml(item.player.name_zh)}<small>${item.player.overall} · ${escapeHtml(item.player.primary_position)}</small></span></button>`).join("") || `<em>无球员</em>`}${leg.cash_amount ? `<strong>＋ ${money(leg.cash_amount)}</strong>` : ""}</div></div>`).join("");
+  const actions = canRespond ? `<button class="trade-reject" data-trade-response="${trade.id}" data-decision="rejected">拒绝</button><button class="trade-accept" data-trade-response="${trade.id}" data-decision="accepted">同意交易</button>` : canCancel ? `<button class="trade-reject" data-trade-cancel="${trade.id}">撤回申请</button>` : "";
+  return `<article class="trade-record ${trade.status}"><header><div><span class="trade-status">${tradeStatusLabel(trade.status)}</span><h3>交易申请 #${trade.id}</h3><small>${new Date(trade.created_at * 1000).toLocaleString("zh-CN")} · ${trade.participants.length} 方交易</small></div><div class="trade-responses">${participantMarkup}</div></header><div class="trade-leg-summaries">${legs}</div>${actions ? `<footer>${actions}</footer>` : ""}</article>`;
+}
+
+async function respondTrade(tradeId, decision) {
+  if (!window.confirm(decision === "accepted" ? "确认同意这笔交易？若你是最后一名确认者，交易会立即执行。" : "确认拒绝这笔交易？整笔交易将结束。")) return;
+  try {
+    const result = await api("trade/respond", { method: "POST", body: JSON.stringify({ trade_id: tradeId, decision }) });
+    toast(result.trade.status === "completed" ? "交易已完成，球员和资金已更新" : decision === "accepted" ? "已同意，等待其他球队确认" : "已拒绝交易");
+    state.user = (await api("me")).user;
+    renderUserBar();
+    await Promise.all([loadPlayers(), refreshAuction(), loadTradeCenter()]);
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function cancelTrade(tradeId) {
+  if (!window.confirm("确认撤回这笔交易申请？")) return;
+  try {
+    await api("trade/cancel", { method: "POST", body: JSON.stringify({ trade_id: tradeId }) });
+    toast("交易申请已撤回");
+    await loadTradeCenter();
+  } catch (error) { toast(error.message, "error"); }
+}
+
 function availableQueuePlayers() {
   const blocked = new Set((state.auction?.queued || []).map(item => String(item.player_id)));
   if (state.auction?.active) blocked.add(String(state.auction.active.player_id));
@@ -972,6 +1126,11 @@ $$('#main-nav button').forEach(button => button.onclick = () => navigate(button.
 $("#player-search").oninput = () => { state.playerPage = 1; renderPlayers(); };
 $("#roster-group").onchange = event => { state.rosterGroup = event.currentTarget.value; renderRoster(); };
 $("#roster-sort").onchange = event => { state.rosterSort = event.currentTarget.value; renderRoster(); };
+$$('[data-trade-parties]').forEach(button => button.onclick = () => {
+  state.tradePartyCount = Number(button.dataset.tradeParties);
+  renderTradeBuilder();
+});
+$("#submit-trade").onclick = submitTrade;
 $("#queue-form").onsubmit = queueAuction;
 $("#open-queue-dialog").onclick = () => openQueueDialog(false);
 $("#market-queue-shortcut").onclick = () => openQueueDialog(true);

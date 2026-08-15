@@ -35,6 +35,9 @@ REALTIME_MUTATION_PATHS = {
     "/api/admin/funds",
     "/api/admin/participant/release",
     "/api/admin/player/release",
+    "/api/trade/create",
+    "/api/trade/respond",
+    "/api/trade/cancel",
     "/api/admin/auction/queue",
     "/api/admin/auction/start",
     "/api/admin/auction/settle",
@@ -126,6 +129,34 @@ def init_database() -> None:
                 PRIMARY KEY (team_id, player_id),
                 UNIQUE(player_id)
             );
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                creator_team_id INTEGER NOT NULL REFERENCES teams(id),
+                status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'rejected', 'cancelled', 'invalid')),
+                created_at INTEGER NOT NULL,
+                resolved_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS trade_participants (
+                trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+                team_id INTEGER NOT NULL REFERENCES teams(id),
+                response TEXT NOT NULL CHECK (response IN ('pending', 'accepted', 'rejected')),
+                responded_at INTEGER,
+                PRIMARY KEY (trade_id, team_id)
+            );
+            CREATE TABLE IF NOT EXISTS trade_legs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+                from_team_id INTEGER NOT NULL REFERENCES teams(id),
+                to_team_id INTEGER NOT NULL REFERENCES teams(id),
+                cash_amount INTEGER NOT NULL DEFAULT 0 CHECK (cash_amount >= 0),
+                UNIQUE (trade_id, from_team_id)
+            );
+            CREATE TABLE IF NOT EXISTS trade_players (
+                trade_leg_id INTEGER NOT NULL REFERENCES trade_legs(id) ON DELETE CASCADE,
+                player_id TEXT NOT NULL REFERENCES players(id),
+                acquired_price INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (trade_leg_id, player_id)
+            );
             """
         )
         auction_columns = {row["name"] for row in db.execute("PRAGMA table_info(auctions)")}
@@ -204,6 +235,149 @@ def completed_auction_payload(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
     item["bids"] = auction_bids(db, row["id"])
     item["bid_count"] = len({bid["team_id"] for bid in item["bids"]})
     return item
+
+
+def trade_payload(db: sqlite3.Connection, trade_id: int) -> dict:
+    trade = db.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    if not trade:
+        raise AppError("交易申请不存在", HTTPStatus.NOT_FOUND)
+    payload = dict(trade)
+    payload["participants"] = [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT tp.team_id, t.name AS team_name, tp.response, tp.responded_at
+            FROM trade_participants tp JOIN teams t ON t.id = tp.team_id
+            WHERE tp.trade_id = ? ORDER BY tp.team_id
+            """,
+            (trade_id,),
+        )
+    ]
+    payload["legs"] = []
+    for row in db.execute(
+        """
+        SELECT l.*, source.name AS from_team_name, target.name AS to_team_name
+        FROM trade_legs l
+        JOIN teams source ON source.id = l.from_team_id
+        JOIN teams target ON target.id = l.to_team_id
+        WHERE l.trade_id = ? ORDER BY l.id
+        """,
+        (trade_id,),
+    ):
+        leg = dict(row)
+        leg["players"] = []
+        for player_row in db.execute(
+            """
+            SELECT tp.player_id, tp.acquired_price, p.payload
+            FROM trade_players tp JOIN players p ON p.id = tp.player_id
+            WHERE tp.trade_leg_id = ? ORDER BY tp.player_id
+            """,
+            (row["id"],),
+        ):
+            item = {
+                "player_id": player_row["player_id"],
+                "acquired_price": player_row["acquired_price"],
+                "player": player_from_row(player_row),
+            }
+            leg["players"].append(item)
+        payload["legs"].append(leg)
+    return payload
+
+
+def execute_trade(db: sqlite3.Connection, trade_id: int) -> None:
+    trade = db.execute(
+        "SELECT * FROM trades WHERE id = ? AND status = 'pending'", (trade_id,)
+    ).fetchone()
+    if not trade:
+        raise AppError("交易状态已变化", HTTPStatus.CONFLICT)
+    participant_ids = [
+        row["team_id"]
+        for row in db.execute(
+            "SELECT team_id FROM trade_participants WHERE trade_id = ?", (trade_id,)
+        )
+    ]
+    placeholders = ",".join("?" for _ in participant_ids)
+    active_count = db.execute(
+        f"""
+        SELECT COUNT(DISTINCT team_id) AS count FROM users
+        WHERE role = 'participant' AND team_id IN ({placeholders})
+        """,
+        participant_ids,
+    ).fetchone()["count"]
+    if active_count != len(participant_ids):
+        raise AppError("参与球队账号已变化")
+    legs = list(db.execute("SELECT * FROM trade_legs WHERE trade_id = ?", (trade_id,)))
+    player_moves = list(
+        db.execute(
+            """
+            SELECT tp.player_id, l.from_team_id, l.to_team_id, r.team_id AS owner_team_id
+            FROM trade_players tp
+            JOIN trade_legs l ON l.id = tp.trade_leg_id
+            LEFT JOIN roster r ON r.player_id = tp.player_id
+            WHERE l.trade_id = ?
+            """,
+            (trade_id,),
+        )
+    )
+    for move in player_moves:
+        if move["owner_team_id"] != move["from_team_id"]:
+            raise AppError("交易球员归属已变化")
+    funds = {
+        row["id"]: row["funds"]
+        for row in db.execute(
+            f"SELECT id, funds FROM teams WHERE id IN ({placeholders})", participant_ids
+        )
+    }
+    deltas = {team_id: 0 for team_id in participant_ids}
+    for leg in legs:
+        deltas[leg["from_team_id"]] -= leg["cash_amount"]
+        deltas[leg["to_team_id"]] += leg["cash_amount"]
+    final_funds = {team_id: funds[team_id] + deltas[team_id] for team_id in participant_ids}
+    if any(amount < 0 for amount in final_funds.values()):
+        raise AppError("交易资金不足")
+    active_leader = db.execute(
+        """
+        SELECT b.team_id, b.amount FROM bids b
+        JOIN auctions a ON a.id = b.auction_id AND a.status = 'active'
+        ORDER BY b.amount DESC, b.created_at ASC, b.id ASC LIMIT 1
+        """
+    ).fetchone()
+    if (
+        active_leader
+        and active_leader["team_id"] in final_funds
+        and final_funds[active_leader["team_id"]] < active_leader["amount"]
+    ):
+        raise AppError("交易后资金不足以覆盖当前最高报价")
+    for team_id, amount in final_funds.items():
+        db.execute("UPDATE teams SET funds = ? WHERE id = ?", (amount, team_id))
+    for move in player_moves:
+        updated = db.execute(
+            """
+            UPDATE roster SET team_id = ?, lineup_role = 'bench'
+            WHERE team_id = ? AND player_id = ?
+            """,
+            (move["to_team_id"], move["from_team_id"], move["player_id"]),
+        )
+        if not updated.rowcount:
+            raise AppError("交易球员归属已变化")
+    now = int(time.time())
+    db.execute(
+        "UPDATE trades SET status = 'completed', resolved_at = ? WHERE id = ?",
+        (now, trade_id),
+    )
+    if player_moves:
+        player_placeholders = ",".join("?" for _ in player_moves)
+        db.execute(
+            f"""
+            UPDATE trades SET status = 'invalid', resolved_at = ?
+            WHERE status = 'pending' AND id != ? AND id IN (
+                SELECT DISTINCT l.trade_id FROM trade_legs l
+                JOIN trade_players tp ON tp.trade_leg_id = l.id
+                WHERE tp.player_id IN ({player_placeholders})
+            )
+            """,
+            (now, trade_id, *[move["player_id"] for move in player_moves]),
+        )
 
 
 def publish_realtime_event() -> None:
@@ -669,6 +843,257 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         )
         self.send_json({"ok": True, "lineup_role": target})
 
+    def api_get_trade_options(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] != "participant" or not user.get("team_id"):
+            raise AppError("仅参与者可以发起交易", HTTPStatus.FORBIDDEN)
+        teams = []
+        for row in db.execute(
+            """
+            SELECT t.id, t.name, t.funds
+            FROM teams t JOIN users u ON u.team_id = t.id AND u.role = 'participant'
+            ORDER BY t.id
+            """
+        ):
+            team = dict(row)
+            team["roster"] = []
+            for roster_row in db.execute(
+                """
+                SELECT r.player_id, r.acquired_price, p.payload
+                FROM roster r JOIN players p ON p.id = r.player_id
+                WHERE r.team_id = ? ORDER BY r.acquired_at
+                """,
+                (row["id"],),
+            ):
+                team["roster"].append(
+                    {
+                        "player_id": roster_row["player_id"],
+                        "acquired_price": roster_row["acquired_price"],
+                        "player": player_from_row(roster_row),
+                    }
+                )
+            teams.append(team)
+        self.send_json({"teams": teams})
+
+    def api_get_trades(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] == "admin":
+            rows = db.execute(
+                """
+                SELECT * FROM trades
+                ORDER BY status = 'pending' DESC, id DESC
+                """
+            )
+        elif user.get("team_id"):
+            rows = db.execute(
+                """
+                SELECT tr.* FROM trades tr
+                JOIN trade_participants tp ON tp.trade_id = tr.id
+                WHERE tp.team_id = ?
+                ORDER BY tr.status = 'pending' DESC, tr.id DESC
+                """,
+                (user["team_id"],),
+            )
+        else:
+            raise AppError("当前账号没有参与球队", HTTPStatus.FORBIDDEN)
+        self.send_json({"trades": [trade_payload(db, row["id"]) for row in rows]})
+
+    def api_post_trade_create(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] != "participant" or not user.get("team_id"):
+            raise AppError("仅参与者可以发起交易", HTTPStatus.FORBIDDEN)
+        data = self.read_json()
+        raw_legs = data.get("legs")
+        if not isinstance(raw_legs, list):
+            raise AppError("交易方案格式错误")
+        legs = []
+        player_ids = set()
+        try:
+            for raw_leg in raw_legs:
+                from_team_id = int(raw_leg.get("from_team_id", 0))
+                to_team_id = int(raw_leg.get("to_team_id", 0))
+                cash_amount = int(str(raw_leg.get("cash_amount", 0)))
+                raw_players = raw_leg.get("player_ids", [])
+                if not isinstance(raw_players, list):
+                    raise ValueError
+                leg_player_ids = [str(player_id).strip() for player_id in raw_players]
+                if cash_amount < 0 or from_team_id <= 0 or to_team_id <= 0:
+                    raise ValueError
+                if any(not player_id or player_id in player_ids for player_id in leg_player_ids):
+                    raise AppError("同一球员不能在一笔交易中重复出现")
+                player_ids.update(leg_player_ids)
+                legs.append(
+                    {
+                        "from_team_id": from_team_id,
+                        "to_team_id": to_team_id,
+                        "cash_amount": cash_amount,
+                        "player_ids": leg_player_ids,
+                    }
+                )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise AppError("球队、球员和金额格式错误") from exc
+        participant_ids = {leg["from_team_id"] for leg in legs}
+        recipient_ids = {leg["to_team_id"] for leg in legs}
+        if len(participant_ids) not in (2, 3) or len(legs) != len(participant_ids):
+            raise AppError("交易必须包含 2 支或 3 支球队，且每队只有一条转出关系")
+        if participant_ids != recipient_ids or any(
+            leg["from_team_id"] == leg["to_team_id"] for leg in legs
+        ):
+            raise AppError("每支球队必须向另一支参与球队转出，并且各有一个接收方")
+        if user["team_id"] not in participant_ids:
+            raise AppError("发起人的球队必须参与交易", HTTPStatus.FORBIDDEN)
+        if not player_ids and not any(leg["cash_amount"] for leg in legs):
+            raise AppError("交易至少需要包含一名球员或一笔资金")
+        placeholders = ",".join("?" for _ in participant_ids)
+        active_count = db.execute(
+            f"""
+            SELECT COUNT(DISTINCT team_id) AS count FROM users
+            WHERE role = 'participant' AND team_id IN ({placeholders})
+            """,
+            tuple(participant_ids),
+        ).fetchone()["count"]
+        if active_count != len(participant_ids):
+            raise AppError("交易中存在无有效参与者账号的球队")
+        with AUCTION_STATE_LOCK:
+            acquired_prices = {}
+            for leg in legs:
+                for player_id in leg["player_ids"]:
+                    roster_item = db.execute(
+                        "SELECT acquired_price FROM roster WHERE team_id = ? AND player_id = ?",
+                        (leg["from_team_id"], player_id),
+                    ).fetchone()
+                    if not roster_item:
+                        raise AppError("所选球员归属已变化", HTTPStatus.CONFLICT)
+                    acquired_prices[player_id] = roster_item["acquired_price"]
+            now = int(time.time())
+            trade_id = db.execute(
+                "INSERT INTO trades(creator_team_id, status, created_at) VALUES (?, 'pending', ?)",
+                (user["team_id"], now),
+            ).lastrowid
+            db.executemany(
+                """
+                INSERT INTO trade_participants(trade_id, team_id, response, responded_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        trade_id,
+                        team_id,
+                        "accepted" if team_id == user["team_id"] else "pending",
+                        now if team_id == user["team_id"] else None,
+                    )
+                    for team_id in participant_ids
+                ],
+            )
+            for leg in legs:
+                leg_id = db.execute(
+                    """
+                    INSERT INTO trade_legs(trade_id, from_team_id, to_team_id, cash_amount)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        trade_id,
+                        leg["from_team_id"],
+                        leg["to_team_id"],
+                        leg["cash_amount"],
+                    ),
+                ).lastrowid
+                db.executemany(
+                    """
+                    INSERT INTO trade_players(trade_leg_id, player_id, acquired_price)
+                    VALUES (?, ?, ?)
+                    """,
+                    [
+                        (leg_id, player_id, acquired_prices[player_id])
+                        for player_id in leg["player_ids"]
+                    ],
+                )
+            db.commit()
+        self.send_json({"trade": trade_payload(db, trade_id)}, HTTPStatus.CREATED)
+
+    def api_post_trade_respond(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] != "participant" or not user.get("team_id"):
+            raise AppError("仅交易参与者可以处理申请", HTTPStatus.FORBIDDEN)
+        data = self.read_json()
+        trade_id = int(data.get("trade_id", 0))
+        decision = str(data.get("decision", "")).strip()
+        if decision not in ("accepted", "rejected"):
+            raise AppError("请选择同意或拒绝")
+        with AUCTION_STATE_LOCK:
+            trade = db.execute(
+                "SELECT * FROM trades WHERE id = ? AND status = 'pending'", (trade_id,)
+            ).fetchone()
+            if not trade:
+                raise AppError("交易申请已处理或不存在", HTTPStatus.CONFLICT)
+            participant = db.execute(
+                """
+                SELECT response FROM trade_participants
+                WHERE trade_id = ? AND team_id = ?
+                """,
+                (trade_id, user["team_id"]),
+            ).fetchone()
+            if not participant:
+                raise AppError("你不在这笔交易中", HTTPStatus.FORBIDDEN)
+            if participant["response"] != "pending":
+                raise AppError("你已经处理过这笔交易", HTTPStatus.CONFLICT)
+            now = int(time.time())
+            db.execute(
+                """
+                UPDATE trade_participants SET response = ?, responded_at = ?
+                WHERE trade_id = ? AND team_id = ?
+                """,
+                (decision, now, trade_id, user["team_id"]),
+            )
+            if decision == "rejected":
+                db.execute(
+                    "UPDATE trades SET status = 'rejected', resolved_at = ? WHERE id = ?",
+                    (now, trade_id),
+                )
+            else:
+                pending = db.execute(
+                    """
+                    SELECT COUNT(*) AS count FROM trade_participants
+                    WHERE trade_id = ? AND response = 'pending'
+                    """,
+                    (trade_id,),
+                ).fetchone()["count"]
+                if not pending:
+                    db.execute("SAVEPOINT trade_execution")
+                    try:
+                        execute_trade(db, trade_id)
+                    except AppError as exc:
+                        db.execute("ROLLBACK TO trade_execution")
+                        db.execute("RELEASE trade_execution")
+                        db.execute(
+                            "UPDATE trades SET status = 'invalid', resolved_at = ? WHERE id = ?",
+                            (now, trade_id),
+                        )
+                        db.commit()
+                        raise AppError(f"交易条件已变化：{exc}", HTTPStatus.CONFLICT) from exc
+                    else:
+                        db.execute("RELEASE trade_execution")
+            db.commit()
+        self.send_json({"trade": trade_payload(db, trade_id)})
+
+    def api_post_trade_cancel(self, db: sqlite3.Connection, user: dict | None) -> None:
+        user = require_user(user)
+        if user["role"] != "participant" or not user.get("team_id"):
+            raise AppError("仅发起人可以撤回交易", HTTPStatus.FORBIDDEN)
+        trade_id = int(self.read_json().get("trade_id", 0))
+        with AUCTION_STATE_LOCK:
+            updated = db.execute(
+                """
+                UPDATE trades SET status = 'cancelled', resolved_at = ?
+                WHERE id = ? AND creator_team_id = ? AND status = 'pending'
+                """,
+                (int(time.time()), trade_id, user["team_id"]),
+            )
+            if not updated.rowcount:
+                raise AppError("只能撤回自己发起且仍待确认的交易", HTTPStatus.CONFLICT)
+            db.commit()
+        self.send_json({"trade": trade_payload(db, trade_id)})
+
     def api_get_admin_teams(self, db: sqlite3.Connection, user: dict | None) -> None:
         require_admin(user)
         teams = [
@@ -708,6 +1133,15 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 "SELECT COUNT(*) AS count FROM bids WHERE user_id = ?",
                 (participant["id"],),
             ).fetchone()["count"]
+            db.execute(
+                """
+                UPDATE trades SET status = 'invalid', resolved_at = ?
+                WHERE status = 'pending' AND id IN (
+                    SELECT trade_id FROM trade_participants WHERE team_id = ?
+                )
+                """,
+                (int(time.time()), team_id),
+            )
             db.execute("DELETE FROM sessions WHERE user_id = ?", (participant["id"],))
             db.execute("DELETE FROM bids WHERE user_id = ?", (participant["id"],))
             db.execute("DELETE FROM roster WHERE team_id = ?", (team_id,))
@@ -747,6 +1181,17 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             if not roster_item:
                 raise AppError("该球员不在指定球队中", HTTPStatus.NOT_FOUND)
             player = player_from_row(roster_item)
+            db.execute(
+                """
+                UPDATE trades SET status = 'invalid', resolved_at = ?
+                WHERE status = 'pending' AND id IN (
+                    SELECT l.trade_id FROM trade_legs l
+                    JOIN trade_players tp ON tp.trade_leg_id = l.id
+                    WHERE tp.player_id = ?
+                )
+                """,
+                (int(time.time()), player_id),
+            )
             db.execute(
                 "DELETE FROM roster WHERE team_id = ? AND player_id = ?",
                 (team_id, player_id),

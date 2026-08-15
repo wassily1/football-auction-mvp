@@ -53,6 +53,7 @@ class AuctionFlowTest(unittest.TestCase):
         self.admin = Client(self.base_url)
         self.alpha = Client(self.base_url)
         self.bravo = Client(self.base_url)
+        self.charlie = Client(self.base_url)
 
     def tearDown(self) -> None:
         self.server.shutdown()
@@ -533,6 +534,214 @@ class AuctionFlowTest(unittest.TestCase):
             )[0],
             403,
         )
+
+    def test_two_team_trade_can_be_rejected_or_completed_atomically(self) -> None:
+        for client, username, password, team_name in [
+            (self.alpha, "alpha", "pass1", "Alpha FC"),
+            (self.bravo, "bravo", "pass2", "Bravo FC"),
+        ]:
+            self.assertEqual(
+                client.request(
+                    "register",
+                    "POST",
+                    {"username": username, "password": password, "team_name": team_name},
+                )[0],
+                201,
+            )
+            self.login(client, username, password)
+        self.login(self.admin, "admin", "admin123")
+        _, teams_payload = self.admin.request("admin/teams")
+        teams = {team["name"]: team for team in teams_payload["teams"]}
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        db = app.connect()
+        try:
+            db.execute("UPDATE teams SET funds = 1000 WHERE id = ?", (teams["Alpha FC"]["id"],))
+            db.execute("UPDATE teams SET funds = 800 WHERE id = ?", (teams["Bravo FC"]["id"],))
+            db.executemany(
+                """
+                INSERT INTO roster(team_id, player_id, acquired_price, acquired_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (teams["Alpha FC"]["id"], players[0]["id"], 120, int(time.time())),
+                    (teams["Bravo FC"]["id"], players[1]["id"], 230, int(time.time())),
+                ],
+            )
+            db.commit()
+        finally:
+            db.close()
+        proposal = {
+            "legs": [
+                {
+                    "from_team_id": teams["Alpha FC"]["id"],
+                    "to_team_id": teams["Bravo FC"]["id"],
+                    "cash_amount": 100,
+                    "player_ids": [players[0]["id"]],
+                },
+                {
+                    "from_team_id": teams["Bravo FC"]["id"],
+                    "to_team_id": teams["Alpha FC"]["id"],
+                    "cash_amount": 50,
+                    "player_ids": [players[1]["id"]],
+                },
+            ]
+        }
+        status, created = self.alpha.request("trade/create", "POST", proposal)
+        self.assertEqual(status, 201)
+        trade_id = created["trade"]["id"]
+        responses = {
+            participant["team_name"]: participant["response"]
+            for participant in created["trade"]["participants"]
+        }
+        self.assertEqual(responses, {"Alpha FC": "accepted", "Bravo FC": "pending"})
+        status, rejected = self.bravo.request(
+            "trade/respond", "POST", {"trade_id": trade_id, "decision": "rejected"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(rejected["trade"]["status"], "rejected")
+
+        status, created = self.alpha.request("trade/create", "POST", proposal)
+        self.assertEqual(status, 201)
+        trade_id = created["trade"]["id"]
+        status, accepted = self.bravo.request(
+            "trade/respond", "POST", {"trade_id": trade_id, "decision": "accepted"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(accepted["trade"]["status"], "completed")
+        _, alpha_roster = self.alpha.request("roster")
+        _, bravo_roster = self.bravo.request("roster")
+        self.assertEqual(alpha_roster["team"]["funds"], 950)
+        self.assertEqual(bravo_roster["team"]["funds"], 850)
+        self.assertEqual(alpha_roster["roster"][0]["player_id"], players[1]["id"])
+        self.assertEqual(alpha_roster["roster"][0]["acquired_price"], 230)
+        self.assertEqual(bravo_roster["roster"][0]["player_id"], players[0]["id"])
+        self.assertEqual(bravo_roster["roster"][0]["acquired_price"], 120)
+        self.assertEqual(alpha_roster["roster"][0]["lineup_role"], "bench")
+        self.assertEqual(bravo_roster["roster"][0]["lineup_role"], "bench")
+
+        status, stale_trade = self.alpha.request(
+            "trade/create",
+            "POST",
+            {
+                "legs": [
+                    {
+                        "from_team_id": teams["Alpha FC"]["id"],
+                        "to_team_id": teams["Bravo FC"]["id"],
+                        "cash_amount": 900,
+                        "player_ids": [],
+                    },
+                    {
+                        "from_team_id": teams["Bravo FC"]["id"],
+                        "to_team_id": teams["Alpha FC"]["id"],
+                        "cash_amount": 0,
+                        "player_ids": [],
+                    },
+                ]
+            },
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(
+            self.admin.request(
+                "admin/funds",
+                "POST",
+                {"team_id": teams["Alpha FC"]["id"], "funds": 100},
+            )[0],
+            200,
+        )
+        status, invalid = self.bravo.request(
+            "trade/respond",
+            "POST",
+            {"trade_id": stale_trade["trade"]["id"], "decision": "accepted"},
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("交易资金不足", invalid["error"])
+        _, alpha_trades = self.alpha.request("trades")
+        invalid_trade = next(
+            trade for trade in alpha_trades["trades"] if trade["id"] == stale_trade["trade"]["id"]
+        )
+        self.assertEqual(invalid_trade["status"], "invalid")
+        self.assertEqual(self.alpha.request("roster")[1]["team"]["funds"], 100)
+        self.assertEqual(self.bravo.request("roster")[1]["team"]["funds"], 850)
+
+    def test_three_team_trade_completes_only_after_every_team_accepts(self) -> None:
+        registrations = [
+            (self.alpha, "alpha", "pass1", "Alpha FC"),
+            (self.bravo, "bravo", "pass2", "Bravo FC"),
+            (self.charlie, "charlie", "pass3", "Charlie FC"),
+        ]
+        for client, username, password, team_name in registrations:
+            self.assertEqual(
+                client.request(
+                    "register",
+                    "POST",
+                    {"username": username, "password": password, "team_name": team_name},
+                )[0],
+                201,
+            )
+            self.login(client, username, password)
+        self.login(self.admin, "admin", "admin123")
+        _, teams_payload = self.admin.request("admin/teams")
+        teams = {team["name"]: team for team in teams_payload["teams"]}
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        team_names = ["Alpha FC", "Bravo FC", "Charlie FC"]
+        db = app.connect()
+        try:
+            for index, team_name in enumerate(team_names):
+                db.execute("UPDATE teams SET funds = 500 WHERE id = ?", (teams[team_name]["id"],))
+                db.execute(
+                    """
+                    INSERT INTO roster(team_id, player_id, acquired_price, acquired_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (teams[team_name]["id"], players[index]["id"], 100 + index, int(time.time())),
+                )
+            db.commit()
+        finally:
+            db.close()
+        proposal = {
+            "legs": [
+                {
+                    "from_team_id": teams["Alpha FC"]["id"],
+                    "to_team_id": teams["Bravo FC"]["id"],
+                    "cash_amount": 10,
+                    "player_ids": [players[0]["id"]],
+                },
+                {
+                    "from_team_id": teams["Bravo FC"]["id"],
+                    "to_team_id": teams["Charlie FC"]["id"],
+                    "cash_amount": 20,
+                    "player_ids": [players[1]["id"]],
+                },
+                {
+                    "from_team_id": teams["Charlie FC"]["id"],
+                    "to_team_id": teams["Alpha FC"]["id"],
+                    "cash_amount": 30,
+                    "player_ids": [players[2]["id"]],
+                },
+            ]
+        }
+        status, created = self.alpha.request("trade/create", "POST", proposal)
+        self.assertEqual(status, 201)
+        trade_id = created["trade"]["id"]
+        status, waiting = self.bravo.request(
+            "trade/respond", "POST", {"trade_id": trade_id, "decision": "accepted"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(waiting["trade"]["status"], "pending")
+        status, completed = self.charlie.request(
+            "trade/respond", "POST", {"trade_id": trade_id, "decision": "accepted"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(completed["trade"]["status"], "completed")
+        rosters = {}
+        for client, _, _, team_name in registrations:
+            rosters[team_name] = client.request("roster")[1]
+        self.assertEqual(rosters["Alpha FC"]["team"]["funds"], 520)
+        self.assertEqual(rosters["Bravo FC"]["team"]["funds"], 490)
+        self.assertEqual(rosters["Charlie FC"]["team"]["funds"], 490)
+        self.assertEqual(rosters["Alpha FC"]["roster"][0]["player_id"], players[2]["id"])
+        self.assertEqual(rosters["Bravo FC"]["roster"][0]["player_id"], players[0]["id"])
+        self.assertEqual(rosters["Charlie FC"]["roster"][0]["player_id"], players[1]["id"])
 
     def test_direct_start_manual_settlement_and_withdrawal(self) -> None:
         self.assertEqual(
