@@ -133,6 +133,21 @@ def init_database() -> None:
             db.execute(
                 "ALTER TABLE auctions ADD COLUMN auction_type TEXT NOT NULL DEFAULT 'open'"
             )
+        db.execute(
+            """
+            DELETE FROM bids
+            WHERE user_id IN (
+                SELECT id FROM users
+                WHERE role = 'participant' AND team_id IS NULL AND username LIKE 'released-%'
+            )
+            """
+        )
+        db.execute(
+            """
+            DELETE FROM users
+            WHERE role = 'participant' AND team_id IS NULL AND username LIKE 'released-%'
+            """
+        )
         admin = db.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1").fetchone()
         if not admin:
             password = os.environ.get("AUCTION_ADMIN_PASSWORD", "admin123")
@@ -500,7 +515,14 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         ]
         teams = [
             dict(row)
-            for row in db.execute("SELECT id, name, funds FROM teams ORDER BY id")
+            for row in db.execute(
+                """
+                SELECT t.id, t.name, t.funds
+                FROM teams t
+                JOIN users u ON u.team_id = t.id AND u.role = 'participant'
+                ORDER BY t.id
+                """
+            )
         ]
         self.send_json(
             {
@@ -680,19 +702,18 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 """,
                 (team_id,),
             ).fetchone()
-            released_username = (
-                f"released-{participant['id']}-{int(time.time())}-{participant['username']}"
-            )
+            deleted_bids = db.execute(
+                "SELECT COUNT(*) AS count FROM bids WHERE user_id = ?",
+                (participant["id"],),
+            ).fetchone()["count"]
             db.execute("DELETE FROM sessions WHERE user_id = ?", (participant["id"],))
+            db.execute("DELETE FROM bids WHERE user_id = ?", (participant["id"],))
             db.execute("DELETE FROM roster WHERE team_id = ?", (team_id,))
             db.execute(
                 "UPDATE teams SET funds = funds + ? WHERE id = ?",
                 (roster_summary["refund"], team_id),
             )
-            db.execute(
-                "UPDATE users SET username = ?, team_id = NULL WHERE id = ?",
-                (released_username, participant["id"]),
-            )
+            db.execute("DELETE FROM users WHERE id = ?", (participant["id"],))
             funds = db.execute("SELECT funds FROM teams WHERE id = ?", (team_id,)).fetchone()[
                 "funds"
             ]
@@ -701,6 +722,7 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             {
                 "ok": True,
                 "released_players": roster_summary["player_count"],
+                "deleted_bids": deleted_bids,
                 "refunded_amount": roster_summary["refund"],
                 "funds": funds,
             }

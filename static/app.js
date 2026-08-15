@@ -823,7 +823,7 @@ async function loadAdmin() {
 
 function adminTeamMarkup(team) {
   const editing = state.editingFundsTeamId === team.id;
-  return `<div class="admin-team-row"><div class="admin-team-identity">${teamAvatar(team.name, team.id)}<span><b>${escapeHtml(team.name)}</b><small>${team.username ? `账号：${escapeHtml(team.username)}` : "账号已释放"} · ${team.roster_count} 名球员</small></span></div>${editing ? `<input class="funds-editor" type="number" min="0" value="${team.funds}" data-funds-team="${team.id}">` : `<div class="funds-readout"><small>当前资金</small><strong>${money(team.funds)}</strong></div>`}<div class="admin-team-actions">${editing ? `<button data-save-funds="${team.id}">保存资金</button><button class="secondary-action" data-cancel-funds="${team.id}">取消</button>` : `<button data-edit-funds="${team.id}">编辑资金</button>`}<button class="secondary-action" data-view-roster="${team.id}">查看阵容</button>${team.participant_user_id ? `<button class="danger-action" data-release-participant="${team.id}" data-roster-count="${team.roster_count}" data-roster-value="${team.roster_value}">释放账号及全部球员</button>` : ""}</div></div>`;
+  return `<div class="admin-team-row"><div class="admin-team-identity">${teamAvatar(team.name, team.id)}<span><b>${escapeHtml(team.name)}</b><small>${team.username ? `账号：${escapeHtml(team.username)}` : "账号已释放"} · ${team.roster_count} 名球员</small></span></div>${editing ? `<input class="funds-editor" type="number" min="0" value="${team.funds}" data-funds-team="${team.id}">` : `<div class="funds-readout"><small>当前资金</small><strong>${money(team.funds)}</strong></div>`}<div class="admin-team-actions">${editing ? `<button data-save-funds="${team.id}">保存资金</button><button class="secondary-action" data-cancel-funds="${team.id}">取消</button>` : `<button data-edit-funds="${team.id}">编辑资金</button>`}<button class="manage-roster-action" data-view-roster="${team.id}">管理 / 释放球员（${team.roster_count}）</button>${team.participant_user_id ? `<button class="danger-action" data-release-participant="${team.id}" data-roster-count="${team.roster_count}" data-roster-value="${team.roster_value}">释放账号及全部球员</button>` : ""}</div></div>`;
 }
 
 async function openAdminRoster(teamId) {
@@ -846,10 +846,10 @@ function renderAdminRoster() {
   });
   $("#admin-roster-detail").innerHTML = `
     <header class="admin-roster-header">
-      <div><p class="eyebrow">TEAM SQUAD · ADMIN</p><h2>${escapeHtml(team.name)}</h2><span>管理员可查看球员详情，或释放单个球员并返还成交金额</span></div>
+      <div><p class="eyebrow">TEAM SQUAD · ADMIN</p><h2>${escapeHtml(team.name)}</h2><span>点击球员卡查看详情；点击红色按钮释放单个球员并返还成交金额</span></div>
       <div class="admin-roster-summary"><span><small>剩余资金</small><b>${money(team.funds)}</b></span><span><small>球员</small><b>${roster.length}</b></span><span><small>首发 / 替补</small><b>${starters.length} / ${bench.length}</b></span></div>
     </header>
-    <div class="admin-roster-list">${roster.length ? [...groups].map(([position, items]) => `<section class="roster-group"><header><h2>${escapeHtml(position)}</h2><span>${items.length} 人</span></header><div class="roster-cards">${items.map(item => `<div class="admin-roster-entry">${rosterCardMarkup(item)}<button type="button" class="release-player-button" data-release-player="${item.player.id}" data-team-id="${team.id}">释放球员 · 返还 ${money(item.acquired_price)}</button></div>`).join("")}</div></section>`).join("") : `<div class="empty-copy roster-empty">该球队暂无球员</div>`}</div>`;
+    <div class="admin-roster-list">${roster.length ? [...groups].map(([position, items]) => `<section class="roster-group"><header><h2>${escapeHtml(position)}</h2><span>${items.length} 人</span></header><div class="roster-cards">${items.map(item => `<div class="admin-roster-entry">${rosterCardMarkup(item)}<button type="button" class="release-player-button" data-release-player="${item.player.id}" data-team-id="${team.id}"><span>释放此球员</span><strong>返还 ${money(item.acquired_price)}</strong></button></div>`).join("")}</div></section>`).join("") : `<div class="empty-copy roster-empty">该球队暂无球员</div>`}</div>`;
   $$('[data-player-id]', $("#admin-roster-detail")).forEach(element => element.onclick = () => openPlayer(element.dataset.playerId));
   $$('[data-release-player]', $("#admin-roster-detail")).forEach(button => button.onclick = () => releasePlayer(Number(button.dataset.teamId), button.dataset.releasePlayer));
 }
@@ -870,10 +870,10 @@ async function releaseParticipant(teamId) {
   const teamName = $(".admin-team-identity b", row)?.textContent || `球队 #${teamId}`;
   const playerCount = Number(button?.dataset.rosterCount || 0);
   const refund = Number(button?.dataset.rosterValue || 0);
-  if (!window.confirm(`确认释放“${teamName}”的参与者账号及全部 ${playerCount} 名球员？账号会立即退出，球员退回球员库，并返还 ${money(refund)}；历史竞拍纪录保留。`)) return;
+  if (!window.confirm(`确认彻底删除“${teamName}”的参与者账号，并释放全部 ${playerCount} 名球员？账号、会话及报价记录会被删除，球员退回球员库，并返还 ${money(refund)}。此操作不可撤销。`)) return;
   try {
     const result = await api("admin/participant/release", { method: "POST", body: JSON.stringify({ team_id: Number(teamId) }) });
-    toast(`账号及 ${result.released_players} 名球员已释放，返还 ${money(result.refunded_amount)}`);
+    toast(`账号已删除，释放 ${result.released_players} 名球员、移除 ${result.deleted_bids} 条报价，返还 ${money(result.refunded_amount)}`);
     await Promise.all([loadAdmin(), loadPlayers(), refreshAuction()]);
   } catch (error) { toast(error.message, "error"); }
 }

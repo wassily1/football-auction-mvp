@@ -316,6 +316,11 @@ class AuctionFlowTest(unittest.TestCase):
             "POST",
             {"username": "alpha", "password": "pass1", "team_name": "Alpha FC"},
         )
+        self.bravo.request(
+            "register",
+            "POST",
+            {"username": "bravo", "password": "pass2", "team_name": "Bravo FC"},
+        )
         self.login(self.alpha, "alpha", "pass1")
         self.login(self.admin, "admin", "admin123")
         self.assertEqual(
@@ -324,7 +329,9 @@ class AuctionFlowTest(unittest.TestCase):
         _, profile = self.alpha.request("me")
         self.assertEqual(profile["user"]["team_name"], "Renamed FC")
         _, teams_payload = self.admin.request("admin/teams")
-        team = teams_payload["teams"][0]
+        teams = {item["username"]: item for item in teams_payload["teams"]}
+        team = teams["alpha"]
+        bravo_team = teams["bravo"]
         self.assertEqual(team["username"], "alpha")
         players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
         db = app.connect()
@@ -340,6 +347,39 @@ class AuctionFlowTest(unittest.TestCase):
                     (team["id"], players[1]["id"], 230, int(time.time())),
                 ],
             )
+            auction_id = db.execute(
+                """
+                INSERT INTO auctions(
+                    player_id, auction_type, status, start_price, min_increment,
+                    duration_seconds, starts_at, ends_at, created_at
+                ) VALUES (?, 'open', 'active', 100, 10, 30, ?, ?, ?)
+                """,
+                (
+                    players[2]["id"],
+                    int(time.time()),
+                    int(time.time()) + 30,
+                    int(time.time()),
+                ),
+            ).lastrowid
+            db.execute(
+                """
+                INSERT INTO bids(auction_id, team_id, user_id, amount, created_at)
+                VALUES (?, ?, ?, 300, ?)
+                """,
+                (auction_id, team["id"], team["participant_user_id"], int(time.time())),
+            )
+            db.execute(
+                """
+                INSERT INTO bids(auction_id, team_id, user_id, amount, created_at)
+                VALUES (?, ?, ?, 250, ?)
+                """,
+                (
+                    auction_id,
+                    bravo_team["id"],
+                    bravo_team["participant_user_id"],
+                    int(time.time()),
+                ),
+            )
             db.commit()
         finally:
             db.close()
@@ -351,6 +391,7 @@ class AuctionFlowTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(released["released_players"], 2)
+        self.assertEqual(released["deleted_bids"], 1)
         self.assertEqual(released["refunded_amount"], 350)
         self.assertEqual(released["funds"], 1000)
         _, released_profile = self.alpha.request("me")
@@ -367,6 +408,76 @@ class AuctionFlowTest(unittest.TestCase):
         ownership = {player["id"]: player["owned"] for player in player_pool["players"]}
         self.assertFalse(ownership[players[0]["id"]])
         self.assertFalse(ownership[players[1]["id"]])
+        _, auction = self.admin.request("auction")
+        self.assertEqual(len(auction["active"]["bids"]), 1)
+        self.assertEqual(auction["active"]["bids"][0]["team_name"], "Bravo FC")
+        self.assertEqual(auction["active"]["bids"][0]["amount"], 250)
+        self.assertNotIn(team["id"], {item["id"] for item in auction["teams"]})
+        self.assertIn(bravo_team["id"], {item["id"] for item in auction["teams"]})
+        db = app.connect()
+        try:
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) AS count FROM users WHERE id = ?",
+                    (team["participant_user_id"],),
+                ).fetchone()["count"],
+                0,
+            )
+            self.assertEqual(
+                db.execute(
+                    "SELECT COUNT(*) AS count FROM bids WHERE user_id = ?",
+                    (team["participant_user_id"],),
+                ).fetchone()["count"],
+                0,
+            )
+        finally:
+            db.close()
+
+    def test_startup_removes_legacy_released_accounts_and_their_bids(self) -> None:
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        db = app.connect()
+        try:
+            team_id = db.execute("INSERT INTO teams(name) VALUES ('Legacy FC')").lastrowid
+            user_id = db.execute(
+                """
+                INSERT INTO users(username, password_hash, role, team_id)
+                VALUES ('released-9-legacy', ?, 'participant', NULL)
+                """,
+                (app.hash_password("pass1"),),
+            ).lastrowid
+            auction_id = db.execute(
+                """
+                INSERT INTO auctions(
+                    player_id, auction_type, status, start_price, min_increment,
+                    duration_seconds, created_at
+                ) VALUES (?, 'open', 'sold', 100, 10, 30, ?)
+                """,
+                (players[0]["id"], int(time.time())),
+            ).lastrowid
+            db.execute(
+                """
+                INSERT INTO bids(auction_id, team_id, user_id, amount, created_at)
+                VALUES (?, ?, ?, 200, ?)
+                """,
+                (auction_id, team_id, user_id, int(time.time())),
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        app.init_database()
+        db = app.connect()
+        try:
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) AS count FROM users WHERE id = ?", (user_id,)).fetchone()["count"],
+                0,
+            )
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) AS count FROM bids WHERE user_id = ?", (user_id,)).fetchone()["count"],
+                0,
+            )
+        finally:
+            db.close()
 
     def test_admin_can_release_one_player_and_refund_original_price(self) -> None:
         self.alpha.request(
