@@ -10,8 +10,11 @@ const state = {
   tradeOptions: [],
   tradePartyCount: 2,
   tradeSelectedTeamIds: [],
-  matchData: { matches: [], standings: [], teams: [] },
+  matchData: { matches: [], standings: [], leaders: { scorers: [], assists: [] }, teams: [] },
   editingMatchId: null,
+  matchStatMatchId: null,
+  matchStatSideTeamId: null,
+  matchStatDraft: [],
   page: "market",
   playerPage: 1,
   playerPageSize: 20,
@@ -176,8 +179,10 @@ async function logout() {
   state.roster = null;
   state.trades = [];
   state.tradeOptions = [];
-  state.matchData = { matches: [], standings: [], teams: [] };
+  state.matchData = { matches: [], standings: [], leaders: { scorers: [], assists: [] }, teams: [] };
   state.editingMatchId = null;
+  state.matchStatMatchId = null;
+  state.matchStatDraft = [];
   state.renderedAuctionKey = null;
   showAuth();
 }
@@ -229,13 +234,43 @@ function renderPlayers() {
   $$('[data-player-page]').forEach(button => button.onclick = () => { state.playerPage = Number(button.dataset.playerPage); renderPlayers(); window.scrollTo({ top: 0, behavior: "smooth" }); });
 }
 
-function openPlayer(playerId) {
+function playerPerformance(playerId) {
+  const records = (state.matchData.matches || []).flatMap(match => {
+    const stat = (match.player_stats || []).find(item => String(item.player_id) === String(playerId));
+    if (!stat) return [];
+    const isHome = Number(stat.team_id) === Number(match.home_team_id);
+    return [{
+      ...stat,
+      match_id: match.id,
+      opponent: isHome ? match.away_team_name : match.home_team_name,
+      score: `${match.home_score} : ${match.away_score}`,
+      played_at: match.played_at,
+      round_name: match.stage === "group" ? `${match.group_name} · ${match.round_name}` : match.round_name,
+    }];
+  });
+  return {
+    records,
+    goals: records.reduce((total, item) => total + item.goals, 0),
+    assists: records.reduce((total, item) => total + item.assists, 0),
+  };
+}
+
+function performanceMarkup(performance) {
+  const records = performance.records.map(item => `<div class="player-performance-row"><time>${item.played_at ? new Date(item.played_at * 1000).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) : "日期待定"}</time><span><b>${escapeHtml(item.team_name)} vs ${escapeHtml(item.opponent)}</b><small>${escapeHtml(item.round_name)} · ${item.score}</small></span><strong>${item.goals ? `⚽ ${item.goals}` : ""}${item.assists ? `<em>助 ${item.assists}</em>` : ""}</strong></div>`).join("");
+  return `<section class="player-performance"><header><div><p class="eyebrow">HCDM CUP RECORD</p><h3>赛事进球与助攻</h3></div><div class="player-performance-totals"><span><small>出场记录</small><b>${performance.records.length}</b></span><span><small>进球</small><b>${performance.goals}</b></span><span><small>助攻</small><b>${performance.assists}</b></span></div></header>${records ? `<div class="player-performance-list">${records}</div>` : `<div class="empty-copy player-performance-empty">暂无进球或助攻记录</div>`}</section>`;
+}
+
+async function openPlayer(playerId) {
   const player = state.players.find(item => String(item.id) === String(playerId))
     || state.auction?.active?.player
     || state.auctionHistory.find(item => String(item.player.id) === String(playerId))?.player
     || state.roster?.roster.find(item => String(item.player.id) === String(playerId))?.player
     || state.adminRoster?.roster.find(item => String(item.player.id) === String(playerId))?.player;
   if (!player) return;
+  if (state.user && !state.matchData.teams.length) {
+    try { state.matchData = await api("matches"); } catch (_) { /* 球员基础资料仍可独立查看。 */ }
+  }
+  const performance = playerPerformance(player.id);
   const labels = Object.keys(player.stats);
   const values = Object.values(player.stats);
   $("#player-detail").innerHTML = `
@@ -245,7 +280,8 @@ function openPlayer(playerId) {
         ${statsMarkup(player, "detail-stats")}
         <div class="radar-wrap">${radarMarkup(labels, values)}<div class="detail-meta"><span>综合评分 <b>${player.overall}</b></span><span>国籍 / 俱乐部 <b>${escapeHtml(player.nationality || "-")} / ${escapeHtml(player.club || "-")}</b></span><span>身高 / 体重 <b>${player.height_cm || "-"} cm / ${player.weight_kg || "-"} kg</b></span><span>花式 / 逆足 <b>${player.skill_moves}★ / ${player.weak_foot}★</b></span><span>副位置 <b>${escapeHtml(player.secondary_positions.join(" / ") || "无")}</b></span><div class="ability-row">${player.gold_abilities.map(item => `<span class="ability">◆ ${escapeHtml(item)}</span>`).join("")}${player.silver_abilities.map(item => `<span class="ability silver">◇ ${escapeHtml(item)}</span>`).join("")}</div></div></div>
       </div>
-    </div>`;
+    </div>
+    ${performanceMarkup(performance)}`;
   $("#player-dialog").showModal();
 }
 
@@ -752,6 +788,17 @@ function standingsMarkup(group) {
   return `<article class="standings-card"><header><h3>${escapeHtml(group.group_name)}</h3><span>${group.rows.length} 支球队</span></header><div class="standings-table"><div class="standings-row standings-head"><span>#</span><span>球队</span><span>赛</span><span>胜 / 平 / 负</span><span>进 / 失</span><span>净胜</span><b>积分</b></div>${group.rows.map(row => `<div class="standings-row"><span class="standings-rank">${row.rank}</span><span class="standings-team">${teamAvatar(row.team_name, row.team_id || row.team_name)}<b>${escapeHtml(row.team_name)}</b></span><span>${row.played}</span><span>${row.wins} / ${row.draws} / ${row.losses}</span><span>${row.goals_for} / ${row.goals_against}</span><span class="${row.goal_difference > 0 ? "positive" : row.goal_difference < 0 ? "negative" : ""}">${row.goal_difference > 0 ? "+" : ""}${row.goal_difference}</span><b>${row.points}</b></div>`).join("")}</div></article>`;
 }
 
+function playerLeaderMarkup(items, metric) {
+  return items.length ? items.slice(0, 10).map((item, index) => `<button type="button" class="player-leader-row" data-player-id="${item.player_id}"><span>${index + 1}</span>${imageMarkup(item.player)}<div><b>${escapeHtml(item.player_name)}</b><small>${escapeHtml(item.team_name)} · ${item.appearances} 场记录</small></div><strong>${metric === "goals" ? "⚽" : "助"} ${item[metric]}</strong></button>`).join("") : `<div class="empty-copy player-leader-empty">暂无记录</div>`;
+}
+
+function renderPlayerLeaders() {
+  const leaders = state.matchData.leaders || { scorers: [], assists: [] };
+  $("#scorer-leaders").innerHTML = playerLeaderMarkup(leaders.scorers, "goals");
+  $("#assist-leaders").innerHTML = playerLeaderMarkup(leaders.assists, "assists");
+  $$('[data-player-id]', $(".player-leaderboard-panel")).forEach(button => button.onclick = () => openPlayer(button.dataset.playerId));
+}
+
 function matchWinnerSide(match) {
   if (match.home_score === null || match.away_score === null || match.stage !== "knockout") return null;
   if (match.home_score !== match.away_score) return match.home_score > match.away_score ? "home" : "away";
@@ -763,11 +810,13 @@ function matchCardMarkup(match) {
   const winnerSide = matchWinnerSide(match);
   const penalties = match.home_penalties !== null ? `<small>点球 ${match.home_penalties} : ${match.away_penalties}</small>` : "";
   const score = completed ? `<strong>${match.home_score}<i>:</i>${match.away_score}</strong>${penalties}` : `<strong class="pending-score">待赛</strong>`;
-  const actions = state.user?.role === "admin" ? `<div class="match-card-actions"><button data-edit-match="${match.id}">编辑</button><button class="danger-action" data-delete-match="${match.id}">删除</button></div>` : "";
-  return `<article class="match-card ${completed ? "completed" : "scheduled"}"><header><span>${escapeHtml(match.stage === "group" ? `${match.group_name} · ${match.round_name}` : match.round_name)}</span><time>${match.played_at ? new Date(match.played_at * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "时间待定"}</time></header><div class="match-versus"><div class="${winnerSide === "home" ? "winner" : ""}">${teamAvatar(match.home_team_name, match.home_team_id || match.home_team_name)}<b>${escapeHtml(match.home_team_name)}</b>${winnerSide === "home" ? `<em>晋级</em>` : ""}</div><div class="match-score">${score}</div><div class="${winnerSide === "away" ? "winner" : ""}">${teamAvatar(match.away_team_name, match.away_team_id || match.away_team_name)}<b>${escapeHtml(match.away_team_name)}</b>${winnerSide === "away" ? `<em>晋级</em>` : ""}</div></div>${actions}</article>`;
+  const playerStats = match.player_stats?.length ? `<div class="match-player-stats">${match.player_stats.map(stat => `<button type="button" data-player-id="${stat.player_id}">${imageMarkup(stat.player)}<span><b>${escapeHtml(stat.player_name)}</b><small>${escapeHtml(stat.team_name)}</small></span>${stat.goals ? `<em>⚽ ${stat.goals}</em>` : ""}${stat.assists ? `<em class="assist-stat">助 ${stat.assists}</em>` : ""}</button>`).join("")}</div>` : "";
+  const actions = state.user?.role === "admin" ? `<div class="match-card-actions">${completed ? `<button class="match-stat-action" data-match-stats="${match.id}">进球 / 助攻${match.player_stats?.length ? `（${match.player_stats.length} 人）` : ""}</button>` : ""}<button data-edit-match="${match.id}">编辑</button><button class="danger-action" data-delete-match="${match.id}">删除</button></div>` : "";
+  return `<article class="match-card ${completed ? "completed" : "scheduled"}"><header><span>${escapeHtml(match.stage === "group" ? `${match.group_name} · ${match.round_name}` : match.round_name)}</span><time>${match.played_at ? new Date(match.played_at * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "时间待定"}</time></header><div class="match-versus"><div class="${winnerSide === "home" ? "winner" : ""}">${teamAvatar(match.home_team_name, match.home_team_id || match.home_team_name)}<b>${escapeHtml(match.home_team_name)}</b>${winnerSide === "home" ? `<em>晋级</em>` : ""}</div><div class="match-score">${score}</div><div class="${winnerSide === "away" ? "winner" : ""}">${teamAvatar(match.away_team_name, match.away_team_id || match.away_team_name)}<b>${escapeHtml(match.away_team_name)}</b>${winnerSide === "away" ? `<em>晋级</em>` : ""}</div></div>${playerStats}${actions}</article>`;
 }
 
 function renderMatchResults() {
+  renderPlayerLeaders();
   $("#standings-grid").innerHTML = state.matchData.standings.length ? state.matchData.standings.map(standingsMarkup).join("") : `<div class="empty-copy match-empty">录入小组赛后自动生成积分榜</div>`;
   const groupMatches = state.matchData.matches.filter(match => match.stage === "group");
   const knockoutMatches = state.matchData.matches.filter(match => match.stage === "knockout");
@@ -782,6 +831,81 @@ function renderMatchResults() {
     $("#match-editor-title").scrollIntoView({ behavior: "smooth", block: "center" });
   });
   $$('[data-delete-match]').forEach(button => button.onclick = () => deleteMatch(Number(button.dataset.deleteMatch)));
+  $$('[data-match-stats]').forEach(button => button.onclick = () => openMatchStats(Number(button.dataset.matchStats)));
+  $$('[data-player-id]', $("#match-results")).forEach(button => button.onclick = () => openPlayer(button.dataset.playerId));
+}
+
+function openMatchStats(matchId) {
+  const match = state.matchData.matches.find(item => item.id === matchId);
+  if (!match || match.home_score === null) return;
+  state.matchStatMatchId = matchId;
+  state.matchStatSideTeamId = match.home_team_id;
+  state.matchStatDraft = match.player_stats.map(stat => ({
+    player_id: stat.player_id,
+    team_id: stat.team_id,
+    goals: stat.goals,
+    assists: stat.assists,
+  }));
+  $("#match-stat-search").value = "";
+  renderMatchStatDialog();
+  $("#match-stat-dialog").showModal();
+}
+
+function renderMatchStatDialog() {
+  const match = state.matchData.matches.find(item => item.id === state.matchStatMatchId);
+  if (!match) return;
+  $("#match-stat-title").textContent = `${match.home_team_name} vs ${match.away_team_name}`;
+  $("#match-stat-score").textContent = `${match.home_score} : ${match.away_score} · ${match.stage === "group" ? match.group_name : match.round_name}`;
+  $("#match-stat-team").innerHTML = `<option value="${match.home_team_id}" ${state.matchStatSideTeamId === match.home_team_id ? "selected" : ""}>${escapeHtml(match.home_team_name)}</option><option value="${match.away_team_id}" ${state.matchStatSideTeamId === match.away_team_id ? "selected" : ""}>${escapeHtml(match.away_team_name)}</option>`;
+  renderMatchStatCandidates();
+  renderMatchStatRows();
+}
+
+function renderMatchStatCandidates() {
+  const match = state.matchData.matches.find(item => item.id === state.matchStatMatchId);
+  if (!match) return;
+  const query = $("#match-stat-search").value.trim().toLowerCase();
+  const sideName = state.matchStatSideTeamId === match.home_team_id ? match.home_team_name : match.away_team_name;
+  const selected = new Set(state.matchStatDraft.map(item => String(item.player_id)));
+  const players = state.players
+    .filter(player => !selected.has(String(player.id)) && `${player.name_zh} ${player.name_en} ${player.club} ${player.nationality}`.toLowerCase().includes(query))
+    .sort((a, b) => Number(b.team_name === sideName) - Number(a.team_name === sideName) || b.overall - a.overall)
+    .slice(0, 18);
+  $("#match-stat-candidates").innerHTML = players.length ? players.map(player => `<button type="button" data-add-match-player="${player.id}">${imageMarkup(player)}<span><b>${escapeHtml(player.name_zh)}</b><small>${escapeHtml(player.team_name || "当前未归属")} · ${player.overall} · ${escapeHtml(player.primary_position)}</small></span><i>＋ 添加</i></button>`).join("") : `<div class="empty-copy">没有匹配的可添加球员</div>`;
+  $$('[data-add-match-player]').forEach(button => button.onclick = () => {
+    state.matchStatDraft.push({ player_id: button.dataset.addMatchPlayer, team_id: state.matchStatSideTeamId, goals: 1, assists: 0 });
+    renderMatchStatCandidates();
+    renderMatchStatRows();
+  });
+}
+
+function renderMatchStatRows() {
+  const match = state.matchData.matches.find(item => item.id === state.matchStatMatchId);
+  $("#match-stat-rows").innerHTML = state.matchStatDraft.length ? state.matchStatDraft.map((stat, index) => {
+    const player = state.players.find(item => String(item.id) === String(stat.player_id));
+    const teamName = stat.team_id === match.home_team_id ? match.home_team_name : match.away_team_name;
+    return `<div class="match-stat-row" data-match-stat-index="${index}">${imageMarkup(player)}<div><b>${escapeHtml(player.name_zh)}</b><small>${escapeHtml(teamName)}</small></div><label>进球<input data-stat-goals type="number" min="0" max="99" value="${stat.goals}"></label><label>助攻<input data-stat-assists type="number" min="0" max="99" value="${stat.assists}"></label><button type="button" data-remove-match-stat="${index}">移除</button></div>`;
+  }).join("") : `<div class="empty-copy match-stat-empty">尚未添加球员，可以分次向前补录</div>`;
+  $$('[data-remove-match-stat]').forEach(button => button.onclick = () => {
+    state.matchStatDraft.splice(Number(button.dataset.removeMatchStat), 1);
+    renderMatchStatCandidates();
+    renderMatchStatRows();
+  });
+}
+
+async function saveMatchStats() {
+  const stats = $$("[data-match-stat-index]").map(row => ({
+    ...state.matchStatDraft[Number(row.dataset.matchStatIndex)],
+    goals: Number($("[data-stat-goals]", row).value || 0),
+    assists: Number($("[data-stat-assists]", row).value || 0),
+  }));
+  try {
+    await api("admin/match/stats/save", { method: "POST", body: JSON.stringify({ match_id: state.matchStatMatchId, stats }) });
+    toast("球员进球助攻记录已保存");
+    $("#match-stat-dialog").close();
+    state.matchStatMatchId = null;
+    await loadMatches();
+  } catch (error) { toast(error.message, "error"); }
 }
 
 async function saveMatch(event) {
@@ -1251,6 +1375,11 @@ $("#match-stage").onchange = event => {
   updateMatchStageFields();
 };
 $("#match-cancel-edit").onclick = () => { state.editingMatchId = null; renderMatchEditor(); };
+$("#match-stat-team").onchange = event => { state.matchStatSideTeamId = Number(event.currentTarget.value); renderMatchStatCandidates(); };
+$("#match-stat-search").oninput = renderMatchStatCandidates;
+$("#match-stat-save").onclick = saveMatchStats;
+$("#match-stat-dialog .dialog-close").onclick = () => $("#match-stat-dialog").close();
+$("#match-stat-dialog").onclick = event => { if (event.target === $("#match-stat-dialog")) $("#match-stat-dialog").close(); };
 $$('[data-trade-parties]').forEach(button => button.onclick = () => {
   state.tradePartyCount = Number(button.dataset.tradeParties);
   renderTradeBuilder();

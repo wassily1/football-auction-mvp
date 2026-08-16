@@ -834,6 +834,76 @@ class AuctionFlowTest(unittest.TestCase):
         edited_table = self.alpha.request("matches")[1]["standings"][0]["rows"]
         edited_alpha = next(row for row in edited_table if row["team_name"] == "Alpha FC")
         self.assertEqual(edited_alpha["points"], 1)
+        players = json.loads(app.PLAYER_SEED.read_text(encoding="utf-8"))
+        status, saved_stats = self.admin.request(
+            "admin/match/stats/save",
+            "POST",
+            {
+                "match_id": first_match_id,
+                "stats": [
+                    {
+                        "player_id": players[0]["id"],
+                        "team_id": teams["Alpha FC"]["id"],
+                        "goals": 1,
+                        "assists": 0,
+                    },
+                    {
+                        "player_id": players[1]["id"],
+                        "team_id": teams["Bravo FC"]["id"],
+                        "goals": 1,
+                        "assists": 1,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(status, 200, saved_stats)
+        self.assertEqual(saved_stats["recorded_players"], 2)
+        match_data = self.alpha.request("matches")[1]
+        recorded_match = next(match for match in match_data["matches"] if match["id"] == first_match_id)
+        self.assertEqual(len(recorded_match["player_stats"]), 2)
+        self.assertEqual(match_data["leaders"]["scorers"][0]["goals"], 1)
+        self.assertEqual(match_data["leaders"]["assists"][0]["player_id"], players[1]["id"])
+        status, too_many_goals = self.admin.request(
+            "admin/match/stats/save",
+            "POST",
+            {
+                "match_id": first_match_id,
+                "stats": [
+                    {
+                        "player_id": players[0]["id"],
+                        "team_id": teams["Alpha FC"]["id"],
+                        "goals": 2,
+                        "assists": 0,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("进球合计", too_many_goals["error"])
+        self.assertEqual(
+            self.alpha.request(
+                "admin/match/stats/save",
+                "POST",
+                {"match_id": first_match_id, "stats": []},
+            )[0],
+            403,
+        )
+        status, score_below_stats = self.admin.request(
+            "admin/match/save",
+            "POST",
+            {
+                "match_id": first_match_id,
+                "stage": "group",
+                "group_name": "A组",
+                "round_name": "小组赛",
+                "home_team_id": teams["Alpha FC"]["id"],
+                "away_team_id": teams["Bravo FC"]["id"],
+                "home_score": 0,
+                "away_score": 0,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("低于已记录", score_below_stats["error"])
         self.assertEqual(
             self.alpha.request(
                 "admin/match/save",
@@ -891,6 +961,7 @@ class AuctionFlowTest(unittest.TestCase):
         alpha = next(row for row in updated_table if row["team_name"] == "Alpha FC")
         self.assertEqual(alpha["played"], 1)
         self.assertEqual(alpha["points"], 0)
+        self.assertEqual(self.alpha.request("matches")[1]["leaders"]["scorers"], [])
 
     def test_direct_start_manual_settlement_and_withdrawal(self) -> None:
         self.assertEqual(

@@ -40,6 +40,7 @@ REALTIME_MUTATION_PATHS = {
     "/api/trade/cancel",
     "/api/admin/match/save",
     "/api/admin/match/delete",
+    "/api/admin/match/stats/save",
     "/api/admin/auction/queue",
     "/api/admin/auction/start",
     "/api/admin/auction/settle",
@@ -176,6 +177,16 @@ def init_database() -> None:
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS match_player_stats (
+                match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+                player_id TEXT NOT NULL REFERENCES players(id),
+                player_name TEXT NOT NULL,
+                team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+                team_name TEXT NOT NULL,
+                goals INTEGER NOT NULL DEFAULT 0 CHECK (goals BETWEEN 0 AND 99),
+                assists INTEGER NOT NULL DEFAULT 0 CHECK (assists BETWEEN 0 AND 99),
+                PRIMARY KEY (match_id, player_id)
+            );
             """
         )
         auction_columns = {row["name"] for row in db.execute("PRAGMA table_info(auctions)")}
@@ -257,7 +268,7 @@ def completed_auction_payload(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
 
 
 def match_payloads(db: sqlite3.Connection) -> list[dict]:
-    return [
+    matches = [
         dict(row)
         for row in db.execute(
             """
@@ -274,6 +285,56 @@ def match_payloads(db: sqlite3.Connection) -> list[dict]:
             """
         )
     ]
+    for match in matches:
+        match["player_stats"] = []
+        for row in db.execute(
+            """
+            SELECT s.player_id, s.player_name, s.team_id, s.team_name,
+                   s.goals, s.assists, p.payload
+            FROM match_player_stats s
+            JOIN players p ON p.id = s.player_id
+            WHERE s.match_id = ?
+            ORDER BY s.goals DESC, s.assists DESC, s.player_name
+            """,
+            (match["id"],),
+        ):
+            item = dict(row)
+            item["player"] = player_from_row(row)
+            item.pop("payload")
+            match["player_stats"].append(item)
+    return matches
+
+
+def player_stat_leaders(matches: list[dict]) -> dict:
+    totals: dict[str, dict] = {}
+    for match in matches:
+        for stat in match["player_stats"]:
+            player = totals.setdefault(
+                stat["player_id"],
+                {
+                    "player_id": stat["player_id"],
+                    "player_name": stat["player_name"],
+                    "team_name": stat["team_name"],
+                    "goals": 0,
+                    "assists": 0,
+                    "appearances": 0,
+                    "player": stat["player"],
+                },
+            )
+            player["team_name"] = stat["team_name"]
+            player["goals"] += stat["goals"]
+            player["assists"] += stat["assists"]
+            player["appearances"] += 1
+    players = list(totals.values())
+    scorers = sorted(
+        (item for item in players if item["goals"]),
+        key=lambda item: (-item["goals"], -item["assists"], item["player_name"]),
+    )
+    assists = sorted(
+        (item for item in players if item["assists"]),
+        key=lambda item: (-item["assists"], -item["goals"], item["player_name"]),
+    )
+    return {"scorers": scorers, "assists": assists}
 
 
 def group_standings(matches: list[dict]) -> list[dict]:
@@ -910,7 +971,12 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             )
         ]
         self.send_json(
-            {"matches": matches, "standings": group_standings(matches), "teams": teams}
+            {
+                "matches": matches,
+                "standings": group_standings(matches),
+                "leaders": player_stat_leaders(matches),
+                "teams": teams,
+            }
         )
 
     def api_post_admin_match_save(self, db: sqlite3.Connection, user: dict | None) -> None:
@@ -966,6 +1032,26 @@ class AuctionHandler(SimpleHTTPRequestHandler):
         if len(team_rows) != 2:
             raise AppError("所选球队不存在", HTTPStatus.NOT_FOUND)
         team_names = {row["id"]: row["name"] for row in team_rows}
+        if match_id:
+            recorded_stats = list(
+                db.execute(
+                    """
+                    SELECT team_id, SUM(goals) AS goals, SUM(assists) AS assists
+                    FROM match_player_stats WHERE match_id = ? GROUP BY team_id
+                    """,
+                    (match_id,),
+                )
+            )
+            if recorded_stats and home_score is None:
+                raise AppError("已有球员进球助攻记录，不能清空比赛比分")
+            score_limits = {home_team_id: home_score, away_team_id: away_score}
+            for stat in recorded_stats:
+                if stat["team_id"] not in score_limits:
+                    raise AppError("已有球员记录属于原对阵球队，请先清空球员记录")
+                if stat["goals"] > score_limits[stat["team_id"]]:
+                    raise AppError("新比分低于已记录的球员进球数")
+                if stat["assists"] > score_limits[stat["team_id"]]:
+                    raise AppError("新比分低于已记录的球员助攻数")
         now = int(time.time())
         if home_score is not None and played_at is None:
             played_at = now
@@ -1024,6 +1110,107 @@ class AuctionHandler(SimpleHTTPRequestHandler):
                 raise AppError("比赛不存在", HTTPStatus.NOT_FOUND)
             db.commit()
         self.send_json({"ok": True, "match_id": match_id})
+
+    def api_post_admin_match_stats_save(
+        self, db: sqlite3.Connection, user: dict | None
+    ) -> None:
+        require_admin(user)
+        data = self.read_json()
+        try:
+            match_id = int(data.get("match_id", 0))
+        except (TypeError, ValueError) as exc:
+            raise AppError("比赛编号格式错误") from exc
+        raw_stats = data.get("stats")
+        if not isinstance(raw_stats, list):
+            raise AppError("球员记录格式错误")
+        match = db.execute("SELECT * FROM matches WHERE id = ?", (match_id,)).fetchone()
+        if not match:
+            raise AppError("比赛不存在", HTTPStatus.NOT_FOUND)
+        if match["home_score"] is None or match["away_score"] is None:
+            raise AppError("需要先录入比赛比分")
+        team_limits = {
+            match["home_team_id"]: match["home_score"],
+            match["away_team_id"]: match["away_score"],
+        }
+        stats = []
+        player_ids = set()
+        try:
+            for raw_stat in raw_stats:
+                player_id = str(raw_stat.get("player_id", "")).strip()
+                team_id = int(raw_stat.get("team_id", 0))
+                goals = int(str(raw_stat.get("goals", 0)))
+                assists = int(str(raw_stat.get("assists", 0)))
+                if (
+                    not player_id
+                    or player_id in player_ids
+                    or team_id not in team_limits
+                    or goals < 0
+                    or assists < 0
+                    or goals > 99
+                    or assists > 99
+                ):
+                    raise ValueError
+                player_ids.add(player_id)
+                if goals or assists:
+                    stats.append(
+                        {
+                            "player_id": player_id,
+                            "team_id": team_id,
+                            "goals": goals,
+                            "assists": assists,
+                        }
+                    )
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise AppError("球员、球队、进球或助攻数据无效") from exc
+        for team_id, score in team_limits.items():
+            team_stats = [stat for stat in stats if stat["team_id"] == team_id]
+            if sum(stat["goals"] for stat in team_stats) > score:
+                raise AppError("球员进球合计不能超过该队比赛进球数")
+            if sum(stat["assists"] for stat in team_stats) > score:
+                raise AppError("球员助攻合计不能超过该队比赛进球数")
+        if player_ids:
+            placeholders = ",".join("?" for _ in player_ids)
+            player_rows = list(
+                db.execute(
+                    f"SELECT id, payload FROM players WHERE id IN ({placeholders})",
+                    tuple(player_ids),
+                )
+            )
+            if len(player_rows) != len(player_ids):
+                raise AppError("存在无效球员", HTTPStatus.NOT_FOUND)
+        else:
+            player_rows = []
+        players = {row["id"]: player_from_row(row) for row in player_rows}
+        team_names = {
+            row["id"]: row["name"]
+            for row in db.execute(
+                "SELECT id, name FROM teams WHERE id IN (?, ?)",
+                tuple(team_limits),
+            )
+        }
+        with AUCTION_STATE_LOCK:
+            db.execute("DELETE FROM match_player_stats WHERE match_id = ?", (match_id,))
+            db.executemany(
+                """
+                INSERT INTO match_player_stats(
+                    match_id, player_id, player_name, team_id, team_name, goals, assists
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        match_id,
+                        stat["player_id"],
+                        players[stat["player_id"]]["name_zh"],
+                        stat["team_id"],
+                        team_names.get(stat["team_id"], "历史球队"),
+                        stat["goals"],
+                        stat["assists"],
+                    )
+                    for stat in stats
+                ],
+            )
+            db.commit()
+        self.send_json({"ok": True, "match_id": match_id, "recorded_players": len(stats)})
 
     def api_post_bid(self, db: sqlite3.Connection, user: dict | None) -> None:
         user = require_user(user)

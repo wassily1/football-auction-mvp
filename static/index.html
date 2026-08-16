@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HCDM杯 · 球员竞拍</title>
-  <link rel="stylesheet" href="/styles.css?v=20260816-1">
+  <link rel="stylesheet" href="/styles.css?v=20260816-2">
 </head>
 <body>
   <div class="noise"></div>
@@ -98,6 +98,7 @@
             <div class="match-form-actions"><button id="match-cancel-edit" class="secondary-button" type="button" hidden>取消编辑</button><button class="primary-button" type="submit">保存比赛</button></div>
           </form>
         </section>
+        <section class="panel player-leaderboard-panel"><header><div><p class="eyebrow">PLAYER PERFORMANCE</p><h2>球员进球与助攻榜</h2></div><span>按全部已录入比赛累计</span></header><div class="player-leaderboard-grid"><div><h3>射手榜</h3><div id="scorer-leaders"></div></div><div><h3>助攻榜</h3><div id="assist-leaders"></div></div></div></section>
         <div class="match-page-grid">
           <section class="panel standings-panel"><header><div><p class="eyebrow">GROUP TABLES</p><h2>小组积分榜</h2></div><span>积分 → 净胜球 → 进球 → 相互战绩</span></header><div id="standings-grid" class="standings-grid"></div></section>
           <section class="panel results-panel"><header><div><p class="eyebrow">FIXTURES & RESULTS</p><h2>全部比赛</h2></div><span id="match-count">0 场</span></header><div id="match-results" class="match-results"></div></section>
@@ -170,7 +171,8 @@
     <div class="bid-confirm-content"><p class="eyebrow">CONFIRM BID</p><h2>确认提交报价？</h2><p id="bid-confirm-copy"></p><strong id="bid-confirm-amount"></strong><small id="bid-confirm-hint"></small><div><button id="bid-confirm-cancel" class="secondary-button" type="button">再想一下</button><button id="bid-confirm-submit" class="primary-button" type="button">确认报价</button></div></div>
   </dialog>
   <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
+  <dialog id="match-stat-dialog" class="match-stat-dialog"><button class="dialog-close" aria-label="关闭球员数据录入">×</button><header><p class="eyebrow">MATCH PERFORMANCE</p><h2 id="match-stat-title">录入进球与助攻</h2><span id="match-stat-score"></span></header><div class="match-stat-editor"><section class="match-stat-picker"><div class="match-stat-picker-controls"><label>所属球队<select id="match-stat-team"></select></label><label>搜索球员<input id="match-stat-search" placeholder="输入球员中文名、英文名或俱乐部"></label></div><p>当前球队球员优先展示，也可以搜索全部 312 名球员向前补录历史数据。</p><div id="match-stat-candidates" class="match-stat-candidates"></div></section><section class="match-stat-records"><header><h3>本场球员记录</h3><span>允许分次补录，合计不可超过比赛比分</span></header><div id="match-stat-rows"></div></section></div><footer><button id="match-stat-save" class="primary-button" type="button">保存球员数据</button></footer></dialog>
   <div id="toast" class="toast"></div>
-  <script src="/app.js?v=20260816-1"></script>
+  <script src="/app.js?v=20260816-2"></script>
 </body>
 </html>
