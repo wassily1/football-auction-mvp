@@ -743,6 +743,155 @@ class AuctionFlowTest(unittest.TestCase):
         self.assertEqual(rosters["Bravo FC"]["roster"][0]["player_id"], players[0]["id"])
         self.assertEqual(rosters["Charlie FC"]["roster"][0]["player_id"], players[1]["id"])
 
+    def test_admin_records_group_standings_and_knockout_results(self) -> None:
+        registrations = [
+            (self.alpha, "alpha", "pass1", "Alpha FC"),
+            (self.bravo, "bravo", "pass2", "Bravo FC"),
+            (self.charlie, "charlie", "pass3", "Charlie FC"),
+        ]
+        for client, username, password, team_name in registrations:
+            self.assertEqual(
+                client.request(
+                    "register",
+                    "POST",
+                    {"username": username, "password": password, "team_name": team_name},
+                )[0],
+                201,
+            )
+            self.login(client, username, password)
+        self.login(self.admin, "admin", "admin123")
+        teams = {
+            team["name"]: team
+            for team in self.admin.request("admin/teams")[1]["teams"]
+        }
+
+        def save_group(home: str, away: str, home_score: int, away_score: int) -> int:
+            status, payload = self.admin.request(
+                "admin/match/save",
+                "POST",
+                {
+                    "stage": "group",
+                    "group_name": "A组",
+                    "round_name": "小组赛",
+                    "home_team_id": teams[home]["id"],
+                    "away_team_id": teams[away]["id"],
+                    "home_score": home_score,
+                    "away_score": away_score,
+                },
+            )
+            self.assertEqual(status, 200, payload)
+            return payload["match_id"]
+
+        first_match_id = save_group("Alpha FC", "Bravo FC", 2, 0)
+        save_group("Bravo FC", "Charlie FC", 3, 1)
+        save_group("Charlie FC", "Alpha FC", 1, 0)
+        status, result = self.alpha.request("matches")
+        self.assertEqual(status, 200)
+        table = result["standings"][0]["rows"]
+        self.assertEqual([row["team_name"] for row in table], ["Alpha FC", "Bravo FC", "Charlie FC"])
+        self.assertEqual(
+            {
+                key: table[0][key]
+                for key in (
+                    "played",
+                    "wins",
+                    "draws",
+                    "losses",
+                    "goals_for",
+                    "goals_against",
+                    "goal_difference",
+                    "points",
+                )
+            },
+            {
+                "played": 2,
+                "wins": 1,
+                "draws": 0,
+                "losses": 1,
+                "goals_for": 2,
+                "goals_against": 1,
+                "goal_difference": 1,
+                "points": 3,
+            },
+        )
+        self.assertEqual(
+            self.admin.request(
+                "admin/match/save",
+                "POST",
+                {
+                    "match_id": first_match_id,
+                    "stage": "group",
+                    "group_name": "A组",
+                    "round_name": "小组赛",
+                    "home_team_id": teams["Alpha FC"]["id"],
+                    "away_team_id": teams["Bravo FC"]["id"],
+                    "home_score": 1,
+                    "away_score": 1,
+                },
+            )[0],
+            200,
+        )
+        edited_table = self.alpha.request("matches")[1]["standings"][0]["rows"]
+        edited_alpha = next(row for row in edited_table if row["team_name"] == "Alpha FC")
+        self.assertEqual(edited_alpha["points"], 1)
+        self.assertEqual(
+            self.alpha.request(
+                "admin/match/save",
+                "POST",
+                {
+                    "stage": "group",
+                    "home_team_id": teams["Alpha FC"]["id"],
+                    "away_team_id": teams["Bravo FC"]["id"],
+                    "home_score": 1,
+                    "away_score": 1,
+                },
+            )[0],
+            403,
+        )
+        status, rejected = self.admin.request(
+            "admin/match/save",
+            "POST",
+            {
+                "stage": "knockout",
+                "round_name": "半决赛",
+                "home_team_id": teams["Alpha FC"]["id"],
+                "away_team_id": teams["Bravo FC"]["id"],
+                "home_score": 1,
+                "away_score": 1,
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("点球比分", rejected["error"])
+        status, knockout = self.admin.request(
+            "admin/match/save",
+            "POST",
+            {
+                "stage": "knockout",
+                "round_name": "半决赛",
+                "home_team_id": teams["Alpha FC"]["id"],
+                "away_team_id": teams["Bravo FC"]["id"],
+                "home_score": 1,
+                "away_score": 1,
+                "home_penalties": 5,
+                "away_penalties": 4,
+            },
+        )
+        self.assertEqual(status, 200, knockout)
+        matches = self.bravo.request("matches")[1]["matches"]
+        knockout_match = next(match for match in matches if match["id"] == knockout["match_id"])
+        self.assertEqual(knockout_match["home_penalties"], 5)
+        self.assertEqual(knockout_match["away_penalties"], 4)
+        self.assertEqual(
+            self.admin.request(
+                "admin/match/delete", "POST", {"match_id": first_match_id}
+            )[0],
+            200,
+        )
+        updated_table = self.alpha.request("matches")[1]["standings"][0]["rows"]
+        alpha = next(row for row in updated_table if row["team_name"] == "Alpha FC")
+        self.assertEqual(alpha["played"], 1)
+        self.assertEqual(alpha["points"], 0)
+
     def test_direct_start_manual_settlement_and_withdrawal(self) -> None:
         self.assertEqual(
             self.alpha.request(

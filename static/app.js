@@ -10,6 +10,8 @@ const state = {
   tradeOptions: [],
   tradePartyCount: 2,
   tradeSelectedTeamIds: [],
+  matchData: { matches: [], standings: [], teams: [] },
+  editingMatchId: null,
   page: "market",
   playerPage: 1,
   playerPageSize: 20,
@@ -127,6 +129,7 @@ function navigate(page) {
   $$("#main-nav button").forEach(button => button.classList.toggle("active", button.dataset.page === page));
   window.scrollTo({ top: 0, behavior: "instant" });
   if (page === "players") renderPlayers();
+  if (page === "matches") loadMatches();
   if (page === "history") loadAuctionHistory();
   if (page === "lineup") loadRoster();
   if (page === "trades") loadTradeCenter();
@@ -146,6 +149,7 @@ function startRealtime() {
   state.eventSource.onmessage = () => {
     refreshAuction();
     if (state.page === "trades" && state.user?.role === "participant") refreshTrades();
+    if (state.page === "matches") loadMatches(true);
   };
   state.eventSource.onerror = () => {
     $("#market-sync").textContent = "正在重连";
@@ -172,6 +176,8 @@ async function logout() {
   state.roster = null;
   state.trades = [];
   state.tradeOptions = [];
+  state.matchData = { matches: [], standings: [], teams: [] };
+  state.editingMatchId = null;
   state.renderedAuctionKey = null;
   showAuth();
 }
@@ -691,6 +697,117 @@ async function saveTeamName(event) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+async function loadMatches(preserveEditor = false) {
+  try {
+    state.matchData = await api("matches");
+    renderMatchResults();
+    if (state.user?.role === "admin" && (!preserveEditor || !state.editingMatchId)) renderMatchEditor();
+  } catch (error) {
+    if (error.status === 401) return bootstrap();
+    toast(error.message, "error");
+  }
+}
+
+function matchTeamOptions(selectedId) {
+  return state.matchData.teams.map(team => `<option value="${team.id}" ${Number(selectedId) === Number(team.id) ? "selected" : ""}>${escapeHtml(team.name)}</option>`).join("");
+}
+
+function localDateTimeValue(timestamp) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp * 1000);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function updateMatchStageFields() {
+  const knockout = $("#match-stage").value === "knockout";
+  $("#match-group-field").hidden = knockout;
+  $("#match-penalty-field").hidden = !knockout;
+  if (!knockout) {
+    $("#match-home-penalties").value = "";
+    $("#match-away-penalties").value = "";
+  }
+}
+
+function renderMatchEditor() {
+  const match = state.matchData.matches.find(item => item.id === state.editingMatchId);
+  const teams = state.matchData.teams;
+  $("#match-editor-title").textContent = match ? `编辑比赛 #${match.id}` : "录入赛程 / 赛果";
+  $("#match-id").value = match?.id || 0;
+  $("#match-stage").value = match?.stage || "group";
+  $("#match-group-name").value = match?.group_name || "A组";
+  $("#match-round-name").value = match?.round_name || "小组赛";
+  $("#match-home-team").innerHTML = teams.length ? matchTeamOptions(match?.home_team_id || teams[0].id) : `<option value="">暂无球队</option>`;
+  $("#match-away-team").innerHTML = teams.length ? matchTeamOptions(match?.away_team_id || teams[1]?.id || teams[0].id) : `<option value="">暂无球队</option>`;
+  $("#match-played-at").value = localDateTimeValue(match?.played_at);
+  $("#match-home-score").value = match?.home_score ?? "";
+  $("#match-away-score").value = match?.away_score ?? "";
+  $("#match-home-penalties").value = match?.home_penalties ?? "";
+  $("#match-away-penalties").value = match?.away_penalties ?? "";
+  $("#match-cancel-edit").hidden = !match;
+  $("#match-form button[type=submit]").disabled = teams.length < 2;
+  updateMatchStageFields();
+}
+
+function standingsMarkup(group) {
+  return `<article class="standings-card"><header><h3>${escapeHtml(group.group_name)}</h3><span>${group.rows.length} 支球队</span></header><div class="standings-table"><div class="standings-row standings-head"><span>#</span><span>球队</span><span>赛</span><span>胜 / 平 / 负</span><span>进 / 失</span><span>净胜</span><b>积分</b></div>${group.rows.map(row => `<div class="standings-row"><span class="standings-rank">${row.rank}</span><span class="standings-team">${teamAvatar(row.team_name, row.team_id || row.team_name)}<b>${escapeHtml(row.team_name)}</b></span><span>${row.played}</span><span>${row.wins} / ${row.draws} / ${row.losses}</span><span>${row.goals_for} / ${row.goals_against}</span><span class="${row.goal_difference > 0 ? "positive" : row.goal_difference < 0 ? "negative" : ""}">${row.goal_difference > 0 ? "+" : ""}${row.goal_difference}</span><b>${row.points}</b></div>`).join("")}</div></article>`;
+}
+
+function matchWinnerSide(match) {
+  if (match.home_score === null || match.away_score === null || match.stage !== "knockout") return null;
+  if (match.home_score !== match.away_score) return match.home_score > match.away_score ? "home" : "away";
+  return match.home_penalties > match.away_penalties ? "home" : "away";
+}
+
+function matchCardMarkup(match) {
+  const completed = match.home_score !== null && match.away_score !== null;
+  const winnerSide = matchWinnerSide(match);
+  const penalties = match.home_penalties !== null ? `<small>点球 ${match.home_penalties} : ${match.away_penalties}</small>` : "";
+  const score = completed ? `<strong>${match.home_score}<i>:</i>${match.away_score}</strong>${penalties}` : `<strong class="pending-score">待赛</strong>`;
+  const actions = state.user?.role === "admin" ? `<div class="match-card-actions"><button data-edit-match="${match.id}">编辑</button><button class="danger-action" data-delete-match="${match.id}">删除</button></div>` : "";
+  return `<article class="match-card ${completed ? "completed" : "scheduled"}"><header><span>${escapeHtml(match.stage === "group" ? `${match.group_name} · ${match.round_name}` : match.round_name)}</span><time>${match.played_at ? new Date(match.played_at * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "时间待定"}</time></header><div class="match-versus"><div class="${winnerSide === "home" ? "winner" : ""}">${teamAvatar(match.home_team_name, match.home_team_id || match.home_team_name)}<b>${escapeHtml(match.home_team_name)}</b>${winnerSide === "home" ? `<em>晋级</em>` : ""}</div><div class="match-score">${score}</div><div class="${winnerSide === "away" ? "winner" : ""}">${teamAvatar(match.away_team_name, match.away_team_id || match.away_team_name)}<b>${escapeHtml(match.away_team_name)}</b>${winnerSide === "away" ? `<em>晋级</em>` : ""}</div></div>${actions}</article>`;
+}
+
+function renderMatchResults() {
+  $("#standings-grid").innerHTML = state.matchData.standings.length ? state.matchData.standings.map(standingsMarkup).join("") : `<div class="empty-copy match-empty">录入小组赛后自动生成积分榜</div>`;
+  const groupMatches = state.matchData.matches.filter(match => match.stage === "group");
+  const knockoutMatches = state.matchData.matches.filter(match => match.stage === "knockout");
+  const sections = [];
+  if (groupMatches.length) sections.push(`<section class="match-stage-section"><header><h3>小组赛</h3><span>${groupMatches.length} 场</span></header><div>${groupMatches.map(matchCardMarkup).join("")}</div></section>`);
+  if (knockoutMatches.length) sections.push(`<section class="match-stage-section knockout"><header><h3>淘汰赛</h3><span>${knockoutMatches.length} 场</span></header><div>${knockoutMatches.map(matchCardMarkup).join("")}</div></section>`);
+  $("#match-results").innerHTML = sections.join("") || `<div class="empty-copy match-empty">管理员录入比赛后会显示在这里</div>`;
+  $("#match-count").textContent = `${state.matchData.matches.length} 场`;
+  $$('[data-edit-match]').forEach(button => button.onclick = () => {
+    state.editingMatchId = Number(button.dataset.editMatch);
+    renderMatchEditor();
+    $("#match-editor-title").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+  $$('[data-delete-match]').forEach(button => button.onclick = () => deleteMatch(Number(button.dataset.deleteMatch)));
+}
+
+async function saveMatch(event) {
+  event.preventDefault();
+  const data = Object.fromEntries(new FormData(event.currentTarget));
+  ["match_id", "home_team_id", "away_team_id"].forEach(key => data[key] = Number(data[key]));
+  data.played_at = data.played_at ? Math.floor(new Date(data.played_at).getTime() / 1000) : null;
+  try {
+    await api("admin/match/save", { method: "POST", body: JSON.stringify(data) });
+    toast(state.editingMatchId ? "赛果已更新，积分榜已重新计算" : "比赛已保存");
+    state.editingMatchId = null;
+    await loadMatches();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function deleteMatch(matchId) {
+  const match = state.matchData.matches.find(item => item.id === matchId);
+  if (!match || !window.confirm(`确认删除 ${match.home_team_name} 对 ${match.away_team_name} 的比赛？积分榜会立即重新计算。`)) return;
+  try {
+    await api("admin/match/delete", { method: "POST", body: JSON.stringify({ match_id: matchId }) });
+    if (state.editingMatchId === matchId) state.editingMatchId = null;
+    toast("比赛已删除，积分榜已更新");
+    await loadMatches();
+  } catch (error) { toast(error.message, "error"); }
+}
+
 async function loadTradeCenter() {
   if (state.user?.role !== "participant") return;
   try {
@@ -1126,6 +1243,14 @@ $$('#main-nav button').forEach(button => button.onclick = () => navigate(button.
 $("#player-search").oninput = () => { state.playerPage = 1; renderPlayers(); };
 $("#roster-group").onchange = event => { state.rosterGroup = event.currentTarget.value; renderRoster(); };
 $("#roster-sort").onchange = event => { state.rosterSort = event.currentTarget.value; renderRoster(); };
+$("#match-form").onsubmit = saveMatch;
+$("#match-stage").onchange = event => {
+  const knockout = event.currentTarget.value === "knockout";
+  if (knockout && $("#match-round-name").value === "小组赛") $("#match-round-name").value = "1/4 决赛";
+  if (!knockout && !$("#match-group-name").value) $("#match-group-name").value = "A组";
+  updateMatchStageFields();
+};
+$("#match-cancel-edit").onclick = () => { state.editingMatchId = null; renderMatchEditor(); };
 $$('[data-trade-parties]').forEach(button => button.onclick = () => {
   state.tradePartyCount = Number(button.dataset.tradeParties);
   renderTradeBuilder();

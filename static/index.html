@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HCDM杯 · 球员竞拍</title>
-  <link rel="stylesheet" href="/styles.css?v=20260815-4">
+  <link rel="stylesheet" href="/styles.css?v=20260816-1">
 </head>
 <body>
   <div class="noise"></div>
@@ -12,6 +12,7 @@
     <a class="brand" href="#market"><span>FC</span><strong>HCDM杯</strong><small>AUCTION ROOM</small></a>
     <nav id="main-nav" hidden>
       <button data-page="market" class="active">竞价市场</button>
+      <button data-page="matches">赛程赛果</button>
       <button data-page="players">球员库</button>
       <button data-page="history">拍卖纪录</button>
       <button data-page="lineup" class="participant-only">我的阵容</button>
@@ -78,6 +79,29 @@
           <label>拍卖结果<select id="history-status-filter"><option value="">全部结果</option><option value="sold">成交</option><option value="unsold">流拍</option></select></label>
         </div>
         <div id="auction-history-list" class="auction-history-list"></div>
+      </section>
+
+      <section id="matches-page" class="page">
+        <div class="page-heading"><div><p class="eyebrow">TOURNAMENT RESULTS</p><h1>赛程与赛果</h1></div><div class="match-rule-pill">3 分制 · 实时积分榜</div></div>
+        <section class="panel match-editor-panel admin-only">
+          <header><div><p class="eyebrow">RESULT ENTRY</p><h2 id="match-editor-title">录入赛程 / 赛果</h2></div><span>比分留空可先创建待赛场次</span></header>
+          <form id="match-form" class="match-form">
+            <input id="match-id" name="match_id" type="hidden" value="0">
+            <label>比赛阶段<select id="match-stage" name="stage"><option value="group">小组赛</option><option value="knockout">淘汰赛</option></select></label>
+            <label id="match-group-field">小组名称<input id="match-group-name" name="group_name" value="A组" maxlength="30"></label>
+            <label>轮次<input id="match-round-name" name="round_name" value="小组赛" maxlength="30" placeholder="例如：第 1 轮 / 半决赛"></label>
+            <label>主队<select id="match-home-team" name="home_team_id" required></select></label>
+            <label>客队<select id="match-away-team" name="away_team_id" required></select></label>
+            <label>比赛时间<input id="match-played-at" name="played_at" type="datetime-local"></label>
+            <div class="match-score-entry"><span>常规比分</span><input id="match-home-score" name="home_score" type="number" min="0" max="99" placeholder="主"><b>:</b><input id="match-away-score" name="away_score" type="number" min="0" max="99" placeholder="客"></div>
+            <div id="match-penalty-field" class="match-score-entry" hidden><span>点球比分</span><input id="match-home-penalties" name="home_penalties" type="number" min="0" max="99" placeholder="主"><b>:</b><input id="match-away-penalties" name="away_penalties" type="number" min="0" max="99" placeholder="客"></div>
+            <div class="match-form-actions"><button id="match-cancel-edit" class="secondary-button" type="button" hidden>取消编辑</button><button class="primary-button" type="submit">保存比赛</button></div>
+          </form>
+        </section>
+        <div class="match-page-grid">
+          <section class="panel standings-panel"><header><div><p class="eyebrow">GROUP TABLES</p><h2>小组积分榜</h2></div><span>积分 → 净胜球 → 进球 → 相互战绩</span></header><div id="standings-grid" class="standings-grid"></div></section>
+          <section class="panel results-panel"><header><div><p class="eyebrow">FIXTURES & RESULTS</p><h2>全部比赛</h2></div><span id="match-count">0 场</span></header><div id="match-results" class="match-results"></div></section>
+        </div>
       </section>
 
       <section id="lineup-page" class="page">
@@ -147,6 +171,6 @@
   </dialog>
   <dialog id="settlement-dialog" class="settlement-dialog"><div id="settlement-content"></div><button id="settlement-close" class="primary-button" type="button">知道了</button></dialog>
   <div id="toast" class="toast"></div>
-  <script src="/app.js?v=20260815-4"></script>
+  <script src="/app.js?v=20260816-1"></script>
 </body>
 </html>

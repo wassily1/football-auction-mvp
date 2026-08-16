@@ -38,6 +38,8 @@ REALTIME_MUTATION_PATHS = {
     "/api/trade/create",
     "/api/trade/respond",
     "/api/trade/cancel",
+    "/api/admin/match/save",
+    "/api/admin/match/delete",
     "/api/admin/auction/queue",
     "/api/admin/auction/start",
     "/api/admin/auction/settle",
@@ -157,6 +159,23 @@ def init_database() -> None:
                 acquired_price INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (trade_leg_id, player_id)
             );
+            CREATE TABLE IF NOT EXISTS matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL CHECK (stage IN ('group', 'knockout')),
+                group_name TEXT,
+                round_name TEXT NOT NULL,
+                home_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+                home_team_name TEXT NOT NULL,
+                away_team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+                away_team_name TEXT NOT NULL,
+                home_score INTEGER CHECK (home_score >= 0),
+                away_score INTEGER CHECK (away_score >= 0),
+                home_penalties INTEGER CHECK (home_penalties >= 0),
+                away_penalties INTEGER CHECK (away_penalties >= 0),
+                played_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             """
         )
         auction_columns = {row["name"] for row in db.execute("PRAGMA table_info(auctions)")}
@@ -235,6 +254,147 @@ def completed_auction_payload(db: sqlite3.Connection, row: sqlite3.Row) -> dict:
     item["bids"] = auction_bids(db, row["id"])
     item["bid_count"] = len({bid["team_id"] for bid in item["bids"]})
     return item
+
+
+def match_payloads(db: sqlite3.Connection) -> list[dict]:
+    return [
+        dict(row)
+        for row in db.execute(
+            """
+            SELECT m.id, m.stage, m.group_name, m.round_name,
+                   m.home_team_id, COALESCE(home.name, m.home_team_name) AS home_team_name,
+                   m.away_team_id, COALESCE(away.name, m.away_team_name) AS away_team_name,
+                   m.home_score, m.away_score, m.home_penalties, m.away_penalties,
+                   m.played_at, m.created_at, m.updated_at
+            FROM matches m
+            LEFT JOIN teams home ON home.id = m.home_team_id
+            LEFT JOIN teams away ON away.id = m.away_team_id
+            ORDER BY m.stage = 'knockout', COALESCE(m.group_name, ''),
+                     COALESCE(m.played_at, m.created_at), m.id
+            """
+        )
+    ]
+
+
+def group_standings(matches: list[dict]) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for match in matches:
+        if match["stage"] == "group":
+            groups.setdefault(match["group_name"], []).append(match)
+    payload = []
+    for group_name, group_matches in groups.items():
+        table: dict[str, dict] = {}
+
+        def team_entry(team_id: int | None, team_name: str) -> tuple[str, dict]:
+            key = f"id:{team_id}" if team_id is not None else f"name:{team_name}"
+            if key not in table:
+                table[key] = {
+                    "team_id": team_id,
+                    "team_name": team_name,
+                    "played": 0,
+                    "wins": 0,
+                    "draws": 0,
+                    "losses": 0,
+                    "goals_for": 0,
+                    "goals_against": 0,
+                    "goal_difference": 0,
+                    "points": 0,
+                }
+            return key, table[key]
+
+        for match in group_matches:
+            home_key, home = team_entry(match["home_team_id"], match["home_team_name"])
+            away_key, away = team_entry(match["away_team_id"], match["away_team_name"])
+            if match["home_score"] is None or match["away_score"] is None:
+                continue
+            home_score = match["home_score"]
+            away_score = match["away_score"]
+            home["played"] += 1
+            away["played"] += 1
+            home["goals_for"] += home_score
+            home["goals_against"] += away_score
+            away["goals_for"] += away_score
+            away["goals_against"] += home_score
+            if home_score > away_score:
+                home["wins"] += 1
+                home["points"] += 3
+                away["losses"] += 1
+            elif away_score > home_score:
+                away["wins"] += 1
+                away["points"] += 3
+                home["losses"] += 1
+            else:
+                home["draws"] += 1
+                away["draws"] += 1
+                home["points"] += 1
+                away["points"] += 1
+            table[home_key] = home
+            table[away_key] = away
+        for item in table.values():
+            item["goal_difference"] = item["goals_for"] - item["goals_against"]
+        ordered = sorted(
+            table.items(),
+            key=lambda pair: (
+                -pair[1]["points"],
+                -pair[1]["goal_difference"],
+                -pair[1]["goals_for"],
+                pair[1]["team_name"],
+            ),
+        )
+        final_order = []
+        index = 0
+        while index < len(ordered):
+            base = ordered[index][1]
+            end = index + 1
+            while end < len(ordered):
+                candidate = ordered[end][1]
+                if (
+                    candidate["points"],
+                    candidate["goal_difference"],
+                    candidate["goals_for"],
+                ) != (base["points"], base["goal_difference"], base["goals_for"]):
+                    break
+                end += 1
+            tied = ordered[index:end]
+            if len(tied) > 1:
+                tied_keys = {key for key, _ in tied}
+                head_to_head = {key: {"points": 0, "goal_difference": 0, "goals_for": 0} for key in tied_keys}
+                for match in group_matches:
+                    if match["home_score"] is None or match["away_score"] is None:
+                        continue
+                    home_key = f"id:{match['home_team_id']}" if match["home_team_id"] is not None else f"name:{match['home_team_name']}"
+                    away_key = f"id:{match['away_team_id']}" if match["away_team_id"] is not None else f"name:{match['away_team_name']}"
+                    if home_key not in tied_keys or away_key not in tied_keys:
+                        continue
+                    home_score = match["home_score"]
+                    away_score = match["away_score"]
+                    head_to_head[home_key]["goal_difference"] += home_score - away_score
+                    head_to_head[away_key]["goal_difference"] += away_score - home_score
+                    head_to_head[home_key]["goals_for"] += home_score
+                    head_to_head[away_key]["goals_for"] += away_score
+                    if home_score > away_score:
+                        head_to_head[home_key]["points"] += 3
+                    elif away_score > home_score:
+                        head_to_head[away_key]["points"] += 3
+                    else:
+                        head_to_head[home_key]["points"] += 1
+                        head_to_head[away_key]["points"] += 1
+                tied.sort(
+                    key=lambda pair: (
+                        -head_to_head[pair[0]]["points"],
+                        -head_to_head[pair[0]]["goal_difference"],
+                        -head_to_head[pair[0]]["goals_for"],
+                        -pair[1]["wins"],
+                        pair[1]["team_name"],
+                    )
+                )
+            final_order.extend(tied)
+            index = end
+        rows = []
+        for rank, (_, item) in enumerate(final_order, 1):
+            rows.append({"rank": rank, **item})
+        payload.append({"group_name": group_name, "rows": rows})
+    return payload
 
 
 def trade_payload(db: sqlite3.Connection, trade_id: int) -> dict:
@@ -468,6 +628,18 @@ def require_admin(user: dict | None) -> dict:
     if user["role"] != "admin":
         raise AppError("仅管理员可以操作", HTTPStatus.FORBIDDEN)
     return user
+
+
+def optional_nonnegative_integer(value: object, label: str) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = int(str(value))
+    except (TypeError, ValueError) as exc:
+        raise AppError(f"{label}必须是整数") from exc
+    if number < 0 or number > 99:
+        raise AppError(f"{label}需要在 0–99 之间")
+    return number
 
 
 class AuctionHandler(SimpleHTTPRequestHandler):
@@ -723,6 +895,135 @@ class AuctionHandler(SimpleHTTPRequestHandler):
             )
         ]
         self.send_json({"auctions": auctions})
+
+    def api_get_matches(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_user(user)
+        matches = match_payloads(db)
+        teams = [
+            dict(row)
+            for row in db.execute(
+                """
+                SELECT t.id, t.name FROM teams t
+                JOIN users u ON u.team_id = t.id AND u.role = 'participant'
+                ORDER BY t.id
+                """
+            )
+        ]
+        self.send_json(
+            {"matches": matches, "standings": group_standings(matches), "teams": teams}
+        )
+
+    def api_post_admin_match_save(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        data = self.read_json()
+        try:
+            match_id = int(data.get("match_id", 0))
+            home_team_id = int(data.get("home_team_id", 0))
+            away_team_id = int(data.get("away_team_id", 0))
+            played_at = int(data["played_at"]) if data.get("played_at") not in (None, "") else None
+        except (TypeError, ValueError) as exc:
+            raise AppError("比赛、球队或时间格式错误") from exc
+        stage = str(data.get("stage", "")).strip()
+        group_name = str(data.get("group_name", "")).strip()
+        round_name = str(data.get("round_name", "")).strip()
+        if stage not in {"group", "knockout"}:
+            raise AppError("请选择小组赛或淘汰赛")
+        if home_team_id <= 0 or away_team_id <= 0 or home_team_id == away_team_id:
+            raise AppError("请选择两支不同球队")
+        if stage == "group":
+            group_name = group_name or "A组"
+            round_name = round_name or "小组赛"
+        else:
+            group_name = ""
+            if not round_name:
+                raise AppError("淘汰赛必须填写轮次")
+        if len(group_name) > 30 or len(round_name) > 30:
+            raise AppError("小组和轮次名称不能超过 30 个字符")
+        home_score = optional_nonnegative_integer(data.get("home_score"), "主队进球")
+        away_score = optional_nonnegative_integer(data.get("away_score"), "客队进球")
+        home_penalties = optional_nonnegative_integer(data.get("home_penalties"), "主队点球")
+        away_penalties = optional_nonnegative_integer(data.get("away_penalties"), "客队点球")
+        if (home_score is None) != (away_score is None):
+            raise AppError("主客队比分需要同时填写")
+        if (home_penalties is None) != (away_penalties is None):
+            raise AppError("点球比分需要同时填写")
+        if stage == "group" and home_penalties is not None:
+            raise AppError("小组赛不能录入点球比分")
+        if stage == "knockout" and home_score is not None:
+            if home_score == away_score:
+                if home_penalties is None or home_penalties == away_penalties:
+                    raise AppError("淘汰赛战平时需要填写不相同的点球比分")
+            elif home_penalties is not None:
+                raise AppError("常规比分已分胜负时不需要填写点球比分")
+        elif home_penalties is not None:
+            raise AppError("需要先填写常规比分")
+        team_rows = list(
+            db.execute(
+                "SELECT id, name FROM teams WHERE id IN (?, ?)",
+                (home_team_id, away_team_id),
+            )
+        )
+        if len(team_rows) != 2:
+            raise AppError("所选球队不存在", HTTPStatus.NOT_FOUND)
+        team_names = {row["id"]: row["name"] for row in team_rows}
+        now = int(time.time())
+        if home_score is not None and played_at is None:
+            played_at = now
+        values = (
+            stage,
+            group_name or None,
+            round_name,
+            home_team_id,
+            team_names[home_team_id],
+            away_team_id,
+            team_names[away_team_id],
+            home_score,
+            away_score,
+            home_penalties,
+            away_penalties,
+            played_at,
+            now,
+        )
+        with AUCTION_STATE_LOCK:
+            if match_id:
+                updated = db.execute(
+                    """
+                    UPDATE matches SET stage = ?, group_name = ?, round_name = ?,
+                        home_team_id = ?, home_team_name = ?, away_team_id = ?,
+                        away_team_name = ?, home_score = ?, away_score = ?,
+                        home_penalties = ?, away_penalties = ?, played_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (*values, match_id),
+                )
+                if not updated.rowcount:
+                    raise AppError("比赛不存在", HTTPStatus.NOT_FOUND)
+            else:
+                match_id = db.execute(
+                    """
+                    INSERT INTO matches(
+                        stage, group_name, round_name, home_team_id, home_team_name,
+                        away_team_id, away_team_name, home_score, away_score,
+                        home_penalties, away_penalties, played_at, updated_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (*values, now),
+                ).lastrowid
+            db.commit()
+        self.send_json({"ok": True, "match_id": match_id})
+
+    def api_post_admin_match_delete(self, db: sqlite3.Connection, user: dict | None) -> None:
+        require_admin(user)
+        try:
+            match_id = int(self.read_json().get("match_id", 0))
+        except (TypeError, ValueError) as exc:
+            raise AppError("比赛编号格式错误") from exc
+        with AUCTION_STATE_LOCK:
+            deleted = db.execute("DELETE FROM matches WHERE id = ?", (match_id,))
+            if not deleted.rowcount:
+                raise AppError("比赛不存在", HTTPStatus.NOT_FOUND)
+            db.commit()
+        self.send_json({"ok": True, "match_id": match_id})
 
     def api_post_bid(self, db: sqlite3.Connection, user: dict | None) -> None:
         user = require_user(user)
